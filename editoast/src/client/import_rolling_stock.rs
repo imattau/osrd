@@ -124,7 +124,7 @@ mod tests {
         use crate::client::generate_temp_file;
 
         use common::units;
-        use database::DbConnectionPool;
+        use database::DbConnectionPoolV2;
 
         fn get_fast_rolling_stock_schema(
             name: &str,
