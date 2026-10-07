@@ -3150,6 +3150,74 @@ class OperationalPointReferenceUic(BaseModel):
     """
 
 
+class OperationalPointReferenceId1(BaseModel):
+    operational_point: str
+    """
+    The object id of an operational point
+    """
+    type: Literal["id"] = "id"
+
+
+class OperationalPointReferenceDomestic1(BaseModel):
+    country_code: Annotated[str, Field(min_length=1)]
+    main_code: str
+    """
+    The operational point main code
+    """
+    secondary_code: SecondaryCode | None = None
+    """
+    An optional secondary code to identify a more specific location
+    """
+    type: Literal["domestic"] = "domestic"
+
+
+class OperationalPointReferenceUic1(BaseModel):
+    secondary_code: SecondaryCode | None = None
+    """
+    An optional secondary code to identify a more specific location
+    """
+    type: Literal["uic"] = "uic"
+    uic: Annotated[int, Field(ge=0)]
+    """
+    The [UIC](https://en.wikipedia.org/wiki/List_of_UIC_country_codes) code of an operational point
+    """
+
+
+class OperationalPointReferenceNodeOperationalPointReference1(BaseModel):
+    """
+    The location represented by a macro node
+    """
+
+    location_type: Literal["operational_point"] = "operational_point"
+
+
+class OperationalPointReferenceNodeOperationalPointReference2(
+    OperationalPointReferenceId1,
+    OperationalPointReferenceNodeOperationalPointReference1,
+):
+    """
+    The location represented by a macro node
+    """
+
+
+class OperationalPointReferenceNodeOperationalPointReference3(
+    OperationalPointReferenceDomestic1,
+    OperationalPointReferenceNodeOperationalPointReference1,
+):
+    """
+    The location represented by a macro node
+    """
+
+
+class OperationalPointReferenceNodeOperationalPointReference4(
+    OperationalPointReferenceUic1,
+    OperationalPointReferenceNodeOperationalPointReference1,
+):
+    """
+    The location represented by a macro node
+    """
+
+
 class PaginationStats(BaseModel):
     """
     Statistics about a paginated editoast response
@@ -5444,27 +5512,6 @@ class LoadingGaugeLimit(BaseModel):
     end: float
 
 
-class MacroNodeForm(BaseModel):
-    full_name: str | None = None
-    is_collapsed: bool | None = None
-    labels: list[str]
-    path_item_key: str
-    position_x: int
-    position_y: int
-    trigram: str | None = None
-
-
-class MacroNodeResponse(BaseModel):
-    full_name: str | None = None
-    id: int
-    is_collapsed: bool
-    labels: list[str]
-    path_item_key: str
-    position_x: int
-    position_y: int
-    trigram: str | None = None
-
-
 class MacroNoteForm(BaseModel):
     labels: list[str]
     text: str
@@ -5556,6 +5603,14 @@ class OperationalPointPartReference(BaseModel):
         | OperationalPointReferenceDomestic
         | OperationalPointReferenceUic
     )
+
+
+class OperationalPointReferenceNodeTrackOffset(TrackOffset):
+    """
+    The location represented by a macro node
+    """
+
+    location_type: Literal["track_offset"] = "track_offset"
 
 
 class OptionsChangeGroup(BaseModel):
@@ -6567,17 +6622,41 @@ class LightRollingStockWithLiveries(LightRollingStock):
     liveries: list[RollingStockLivery]
 
 
-class MacroNodeBatchForm(BaseModel):
-    macro_nodes: list[MacroNodeForm]
-    scenario_id: int
+class MacroNodeForm(BaseModel):
+    full_name: str | None = None
+    is_collapsed: bool | None = None
+    labels: list[str]
+    node_location: (
+        OperationalPointReferenceNodeTrackOffset
+        | OperationalPointReferenceNodeOperationalPointReference2
+        | OperationalPointReferenceNodeOperationalPointReference3
+        | OperationalPointReferenceNodeOperationalPointReference4
+    )
+    """
+    The location represented by a macro node
+    """
+    position_x: int
+    position_y: int
+    short_name: str | None = None
 
 
-class MacroNodeBatchResponse(BaseModel):
-    macro_nodes: list[MacroNodeResponse]
-
-
-class MacroNodeListResponse(PaginationStats):
-    results: list[MacroNodeResponse]
+class MacroNodeResponse(BaseModel):
+    full_name: str | None = None
+    id: int
+    is_collapsed: bool
+    labels: list[str]
+    node_location: (
+        OperationalPointReferenceNodeTrackOffset
+        | OperationalPointReferenceNodeOperationalPointReference2
+        | OperationalPointReferenceNodeOperationalPointReference3
+        | OperationalPointReferenceNodeOperationalPointReference4
+    )
+    """
+    The location represented by a macro node
+    """
+    position_x: int
+    position_y: int
+    short_name: str | None = None
 
 
 class MacroNoteBatchForm(BaseModel):
@@ -7225,6 +7304,19 @@ class InfraObjectSpeedSection(BaseModel):
 class InfraObjectSwitch(BaseModel):
     obj_type: Literal["Switch"] = "Switch"
     railjson: Switch
+
+
+class MacroNodeBatchForm(BaseModel):
+    macro_nodes: list[MacroNodeForm]
+    scenario_id: int
+
+
+class MacroNodeBatchResponse(BaseModel):
+    macro_nodes: list[MacroNodeResponse]
+
+
+class MacroNodeListResponse(PaginationStats):
+    results: list[MacroNodeResponse]
 
 
 class NeutralSection(BaseModel):
