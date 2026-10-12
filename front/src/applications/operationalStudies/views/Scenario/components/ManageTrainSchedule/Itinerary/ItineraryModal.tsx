@@ -649,7 +649,7 @@ const ItineraryModal = ({
       initCustomTracksEntry(step.location);
     });
     setPathSteps(ensureTrailingEmptyStep(formattedPathSteps));
-  }, [trainState.pathSteps]);
+  }, [trainState.pathSteps, setPathSteps, initCustomTracksEntry]);
 
   const pathfindingStepsWithLocations = useMemo(
     () =>
