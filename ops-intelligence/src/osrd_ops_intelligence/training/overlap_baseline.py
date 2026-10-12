@@ -20,12 +20,15 @@ def load_episodes(data_dirs: list[Path]) -> tuple[list[dict[str, Any]], list[dic
         expected_hash = manifest.get("episodes_sha256")
         if expected_hash and hashlib.sha256(content).hexdigest() != expected_hash:
             raise ValueError(f"Episode checksum mismatch in {episode_path}")
-        sources.append({
-            "path": str(directory),
-            "seed": manifest.get("seed"),
-            "episode_count": manifest.get("episode_count"),
-            "parameters": manifest.get("parameters", {}),
-        })
+        sources.append(
+            {
+                "path": str(directory),
+                "seed": manifest.get("seed"),
+                "episode_count": manifest.get("episode_count"),
+                "episodes_sha256": expected_hash,
+                "parameters": manifest.get("parameters", {}),
+            }
+        )
         for line in content.decode("utf-8").splitlines():
             episode = json.loads(line)
             episode_id = episode["episode_id"]
@@ -50,17 +53,19 @@ def rows_for_episode(episode: dict[str, Any]) -> list[dict[str, Any]]:
         if "train_schedule_id" in train_id
     }
     summaries = episode["outputs"].get("simulation_summaries", {})
-    rows = []
+    rows: list[dict[str, Any]] = []
     for index, schedule_id in enumerate(schedule_ids):
         neighbors = [abs(starts[index] - other) for j, other in enumerate(starts) if j != index]
         nearest_gap = min(neighbors) if neighbors else float("inf")
         summary = summaries.get(str(schedule_id), {}).get("train_schedule", {})
-        rows.append({
-            "episode_id": episode["episode_id"],
-            "nearest_departure_gap_s": nearest_gap,
-            "travel_time_s": (summary.get("time") or 0) / 1000,
-            "label": int(schedule_id in involved),
-        })
+        rows.append(
+            {
+                "episode_id": episode["episode_id"],
+                "nearest_departure_gap_s": nearest_gap,
+                "travel_time_s": (summary.get("time") or 0) / 1000,
+                "label": int(schedule_id in involved),
+            }
+        )
     return rows
 
 
@@ -90,12 +95,62 @@ def metrics(actual: list[int], predicted: list[int]) -> dict[str, float | int]:
     }
 
 
-def evaluate(data_dirs: list[Path], test_fraction: float) -> dict[str, Any]:
-    episodes, sources = load_episodes(data_dirs)
-    train_episodes = [e for e in episodes if not split_for_episode(e["episode_id"], test_fraction)]
-    test_episodes = [e for e in episodes if split_for_episode(e["episode_id"], test_fraction)]
+def regression_metrics(actual: list[float], predicted: list[float]) -> dict[str, float | int]:
+    if not actual:
+        return {"count": 0, "mae_ms": 0.0, "rmse_ms": 0.0}
+    errors = [prediction - value for value, prediction in zip(actual, predicted, strict=True)]
+    return {
+        "count": len(actual),
+        "mae_ms": sum(abs(error) for error in errors) / len(errors),
+        "rmse_ms": (sum(error * error for error in errors) / len(errors)) ** 0.5,
+    }
+
+
+def split_by_scenario_group(
+    episodes: list[dict[str, Any]], test_fraction: float
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+    group_for_episode = {
+        episode["episode_id"]: episode.get("scenario_group", episode["episode_id"])
+        for episode in episodes
+    }
+    groups = sorted(set(group_for_episode.values()))
+    if len(groups) < 2:
+        raise ValueError("Need at least two scenario groups for a scenario-held-out evaluation")
+    test_group_count = max(1, min(len(groups) - 1, round(len(groups) * test_fraction)))
+    test_groups = set(
+        sorted(groups, key=lambda group: hashlib.sha256(group.encode()).hexdigest())[
+            :test_group_count
+        ]
+    )
+    train_episodes = [
+        episode
+        for episode in episodes
+        if group_for_episode[episode["episode_id"]] not in test_groups
+    ]
+    test_episodes = [
+        episode for episode in episodes if group_for_episode[episode["episode_id"]] in test_groups
+    ]
     if not train_episodes or not test_episodes:
         raise ValueError("Episode split produced an empty train or test partition")
+    split = {
+        "method": "stable hash assignment by scenario_group; entire groups held out",
+        "test_fraction_target": test_fraction,
+        "scenario_group_count": len(groups),
+        "train_scenario_groups": sorted(
+            set(group_for_episode[episode["episode_id"]] for episode in train_episodes)
+        ),
+        "test_scenario_groups": sorted(test_groups),
+        "train_episode_count": len(train_episodes),
+        "test_episode_count": len(test_episodes),
+        "train_episode_ids": [episode["episode_id"] for episode in train_episodes],
+        "test_episode_ids": [episode["episode_id"] for episode in test_episodes],
+    }
+    return train_episodes, test_episodes, split
+
+
+def evaluate(data_dirs: list[Path], test_fraction: float) -> dict[str, Any]:
+    episodes, sources = load_episodes(data_dirs)
+    train_episodes, test_episodes, split = split_by_scenario_group(episodes, test_fraction)
     train = [row for episode in train_episodes for row in rows_for_episode(episode)]
     test = [row for episode in test_episodes for row in rows_for_episode(episode)]
     candidates = sorted({0.0, *(row["nearest_departure_gap_s"] for row in train)})
@@ -117,17 +172,25 @@ def evaluate(data_dirs: list[Path], test_fraction: float) -> dict[str, Any]:
     y_test = [row["label"] for row in test]
     overlap_predictions = [int(row["nearest_departure_gap_s"] <= best_threshold) for row in test]
     majority = int(sum(row["label"] for row in train) * 2 >= len(train))
+    train_delay_deltas = [
+        float(label["arrival_delta_ms"])
+        for episode in train_episodes
+        for label in episode.get("labels", {}).get("paired_by_train_index", [])
+        if label.get("arrival_delta_ms") is not None
+    ]
+    test_delay_deltas = [
+        float(label["arrival_delta_ms"])
+        for episode in test_episodes
+        for label in episode.get("labels", {}).get("paired_by_train_index", [])
+        if label.get("arrival_delta_ms") is not None
+    ]
+    mean_delay_delta = (
+        sum(train_delay_deltas) / len(train_delay_deltas) if train_delay_deltas else 0.0
+    )
     return {
         "schema": "osrd-ops-overlap-baseline-report/v1",
         "source_runs": sources,
-        "split": {
-            "method": "stable sha256 assignment by episode_id; entire episodes held out",
-            "test_fraction_target": test_fraction,
-            "train_episode_count": len(train_episodes),
-            "test_episode_count": len(test_episodes),
-            "train_episode_ids": [e["episode_id"] for e in train_episodes],
-            "test_episode_ids": [e["episode_id"] for e in test_episodes],
-        },
+        "split": split,
         "target": "train schedule is involved in at least one OSRD-reported timetable conflict",
         "baseline": {
             "type": "departure-gap threshold",
@@ -143,17 +206,25 @@ def evaluate(data_dirs: list[Path], test_fraction: float) -> dict[str, Any]:
             "predicted_class": majority,
             "test_metrics": metrics(y_test, [majority] * len(y_test)),
         },
+        "paired_arrival_delta_baseline": {
+            "target": "treatment arrival time minus matched baseline arrival time (milliseconds)",
+            "zero_change_test_metrics": regression_metrics(
+                test_delay_deltas, [0.0] * len(test_delay_deltas)
+            ),
+            "training_mean_test_metrics": regression_metrics(
+                test_delay_deltas, [mean_delay_delta] * len(test_delay_deltas)
+            ),
+            "training_mean_prediction_ms": mean_delay_delta,
+        },
         "data_counts": {
             "episode_count": len(episodes),
             "schedule_count": len(train) + len(test),
             "conflict_involved_schedule_count": sum(row["label"] for row in train + test),
         },
         "limitations": [
-            "Synthetic timetable perturbations only; no field operating-delay outcomes.",
+            "Synthetic paired delays only; no field operating-delay outcomes.",
             "The threshold is tuned on this small benchmark and is not a calibrated risk model.",
-            (
-                "OSRD participants are positive; all other schedules are negative."
-            ),
+            ("OSRD participants are positive; all other schedules are negative."),
         ],
     }
 

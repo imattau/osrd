@@ -18,10 +18,11 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 OSRD_COMMIT = "26d19cb55bf18a26d2f0da7a9fc586c310d3ecf0"
 SCHEMA_SHA256 = "2164e74a522514e92c0b6fb6f252c7132e174b5a658e7aedf290fbf8e8d51b6b"
-EPISODE_SCHEMA = "osrd-ops-replay-episode/v1"
+EPISODE_SCHEMA = "osrd-ops-replay-episode/v2"
 SCHEMA_PATH = (
     Path(__file__).resolve().parents[3] / "data_contracts" / "osrd" / OSRD_COMMIT / "openapi.yaml"
 )
@@ -92,6 +93,60 @@ def make_schedule(
     }
 
 
+def create_arm(
+    client: Editoast,
+    *,
+    args: argparse.Namespace,
+    arm: str,
+    episode_index: int,
+    schedules: list[dict[str, Any]],
+) -> dict[str, Any]:
+    timetable = client.request("POST", "/timetable", {"timetable_type": "CALENDAR"})
+    timetable_id = timetable["timetable_id"]
+    schedule_set = client.request(
+        "POST",
+        "/train_schedule_sets",
+        {
+            "description": (f"ops-intelligence {arm} seed={args.seed} episode={episode_index}"),
+            "name": f"ops-replay-{args.seed}-{episode_index}-{arm}",
+            "published": False,
+            "timetable_type": "CALENDAR",
+        },
+    )
+    set_id = schedule_set["id"]
+    client.request(
+        "POST",
+        f"/timetable/{timetable_id}/train_schedule_sets",
+        {"train_schedule_set_ids": [set_id]},
+    )
+    created = client.request("POST", f"/train_schedule_sets/{set_id}/train_schedules", schedules)
+    ids = [row["id"] for row in created]
+    summaries = client.request(
+        "POST",
+        "/train_schedules/simulation_summary",
+        {"infra_id": args.infra_id, "timetable_id": timetable_id, "ids": ids},
+    )
+    conflicts = client.request(
+        "GET", f"/timetable/{timetable_id}/conflicts?infra_id={args.infra_id}"
+    )
+    return {
+        "timetable_id": timetable_id,
+        "train_schedule_set_id": set_id,
+        "schedule_ids": ids,
+        "simulation_summaries": summaries,
+        "conflicts": conflicts,
+    }
+
+
+def conflict_participants(conflicts: list[dict[str, Any]]) -> set[int]:
+    return {
+        int(train_id["train_schedule_id"])
+        for conflict in conflicts
+        for train_id in conflict.get("train_ids", [])
+        if "train_schedule_id" in train_id
+    }
+
+
 def collect(args: argparse.Namespace) -> Path:
     if not SCHEMA_PATH.exists():
         raise RuntimeError(f"Pinned Editoast schema is missing: {SCHEMA_PATH}")
@@ -105,44 +160,34 @@ def collect(args: argparse.Namespace) -> Path:
     rng = random.Random(args.seed)
     now_ms = int(time.time() * 1000) + 60_000
     created_at = datetime.now(UTC).isoformat()
+    infra = client.request("GET", f"/infra/{args.infra_id}")
+    rolling_stock = client.request(
+        "GET", f"/rolling_stock/name/{quote(args.rolling_stock, safe='')}"
+    )
+    headway_options = args.headway_options_s or [args.headway_s]
+    scenario_group = args.scenario_group or (
+        f"infra-{args.infra_id}-{args.start_track}-{args.end_track}-headways-"
+        + "-".join(str(value) for value in sorted(set(headway_options)))
+    )
     episodes: list[dict[str, Any]] = []
     for episode_index in range(args.episodes):
-        timetable = client.request("POST", "/timetable", {"timetable_type": "CALENDAR"})
-        timetable_id = timetable["timetable_id"]
-        schedule_set = client.request(
-            "POST",
-            "/train_schedule_sets",
-            {
-                "description": f"ops-intelligence replay seed={args.seed} episode={episode_index}",
-                "name": f"ops-replay-{args.seed}-{episode_index}",
-                "published": False,
-                "timetable_type": "CALENDAR",
-            },
-        )
-        set_id = schedule_set["id"]
-        client.request(
-            "POST",
-            f"/timetable/{timetable_id}/train_schedule_sets",
-            {"train_schedule_set_ids": [set_id]},
-        )
-
-        schedules = []
-        perturbations = []
+        baseline_schedules: list[dict[str, Any]] = []
+        dwell_inputs: list[dict[str, int]] = []
+        episode_headway_s = rng.choice(headway_options)
         base_departure = now_ms + episode_index * 3_600_000
         for train_index in range(args.trains):
-            # Baseline and perturbed departures are sampled from a fixed seed.
             departure_shift_s = (
                 0
                 if train_index == 0
                 else rng.randint(-args.max_departure_shift_s, args.max_departure_shift_s)
             )
             dwell_s = 0 if train_index == 0 else rng.randint(0, args.max_dwell_s)
-            schedules.append(
+            baseline_schedules.append(
                 make_schedule(
                     index=train_index,
                     seed=args.seed + episode_index,
                     departure_ms=base_departure
-                    + train_index * args.headway_s * 1000
+                    + train_index * episode_headway_s * 1000
                     + departure_shift_s * 1000,
                     rolling_stock=args.rolling_stock,
                     start_track=args.start_track,
@@ -152,30 +197,92 @@ def collect(args: argparse.Namespace) -> Path:
                     dwell_seconds=dwell_s,
                 )
             )
-            perturbations.append(
+            dwell_inputs.append(
                 {
                     "train_index": train_index,
-                    "departure_shift_s": departure_shift_s,
+                    "background_departure_shift_s": departure_shift_s,
                     "destination_dwell_s": dwell_s,
                 }
             )
 
-        created_schedules = client.request(
-            "POST", f"/train_schedule_sets/{set_id}/train_schedules", schedules
+        treatment_schedules = json.loads(json.dumps(baseline_schedules))
+        incident_train_index = rng.randrange(args.trains)
+        incident_delay_s = rng.randint(args.min_incident_delay_s, args.max_incident_delay_s)
+        treatment_schedules[incident_train_index]["start_time"] += incident_delay_s * 1000
+
+        baseline_arm = create_arm(
+            client,
+            args=args,
+            arm="baseline",
+            episode_index=episode_index,
+            schedules=baseline_schedules,
         )
-        ids = [row["id"] for row in created_schedules]
-        summaries = client.request(
-            "POST",
-            "/train_schedules/simulation_summary",
-            {"infra_id": args.infra_id, "timetable_id": timetable_id, "ids": ids},
+        treatment_arm = create_arm(
+            client,
+            args=args,
+            arm="treatment",
+            episode_index=episode_index,
+            schedules=treatment_schedules,
         )
-        conflicts = client.request(
-            "GET", f"/timetable/{timetable_id}/conflicts?infra_id={args.infra_id}"
-        )
+        baseline_ids = baseline_arm["schedule_ids"]
+        treatment_ids = treatment_arm["schedule_ids"]
+        baseline_summaries = baseline_arm["simulation_summaries"]
+        treatment_summaries = treatment_arm["simulation_summaries"]
+        baseline_conflicted = conflict_participants(baseline_arm["conflicts"])
+        treatment_conflicted = conflict_participants(treatment_arm["conflicts"])
+
         simulation_labels: dict[str, dict[str, Any]] = {}
-        for schedule_id in ids:
-            result = summaries.get(str(schedule_id), {}).get("train_schedule", {})
-            simulation_labels[str(schedule_id)] = {
+        paired_labels: list[dict[str, Any]] = []
+        for index, (base_id, treatment_id) in enumerate(
+            zip(baseline_ids, treatment_ids, strict=True)
+        ):
+            base_result = baseline_summaries.get(str(base_id), {}).get("train_schedule", {})
+            result = treatment_summaries.get(str(treatment_id), {}).get("train_schedule", {})
+            baseline_arrival_ms = (
+                baseline_schedules[index]["start_time"]
+                + (base_result.get("path_item_times_final") or [None])[-1]
+                if base_result.get("path_item_times_final")
+                else None
+            )
+            treatment_arrival_ms = (
+                treatment_schedules[index]["start_time"]
+                + (result.get("path_item_times_final") or [None])[-1]
+                if result.get("path_item_times_final")
+                else None
+            )
+            base_conflict = base_id in baseline_conflicted
+            treatment_conflict = treatment_id in treatment_conflicted
+            paired_labels.append(
+                {
+                    "train_index": index,
+                    "baseline_schedule_id": base_id,
+                    "treatment_schedule_id": treatment_id,
+                    "baseline_status": base_result.get("status", "unknown"),
+                    "treatment_status": result.get("status", "unknown"),
+                    "baseline_arrival_ms": baseline_arrival_ms,
+                    "treatment_arrival_ms": treatment_arrival_ms,
+                    "arrival_delta_ms": (
+                        treatment_arrival_ms - baseline_arrival_ms
+                        if baseline_arrival_ms is not None and treatment_arrival_ms is not None
+                        else None
+                    ),
+                    "travel_time_delta_ms": (
+                        result["time"] - base_result["time"]
+                        if result.get("time") is not None and base_result.get("time") is not None
+                        else None
+                    ),
+                    "energy_delta_kwh": (
+                        result["energy_consumption"] - base_result["energy_consumption"]
+                        if result.get("energy_consumption") is not None
+                        and base_result.get("energy_consumption") is not None
+                        else None
+                    ),
+                    "baseline_conflict": base_conflict,
+                    "treatment_conflict": treatment_conflict,
+                    "new_conflict": treatment_conflict and not base_conflict,
+                }
+            )
+            simulation_labels[str(treatment_id)] = {
                 "status": result.get("status", "unknown"),
                 "travel_time_ms": result.get("time"),
                 "energy_consumption_kwh": result.get("energy_consumption"),
@@ -186,8 +293,12 @@ def collect(args: argparse.Namespace) -> Path:
             {
                 "schema": EPISODE_SCHEMA,
                 "episode_id": str(
-                    uuid.uuid5(uuid.NAMESPACE_URL, f"osrd-replay:{args.seed}:{episode_index}")
+                    uuid.uuid5(
+                        uuid.NAMESPACE_URL,
+                        f"osrd-replay:v2:{scenario_group}:{args.seed}:{episode_index}",
+                    )
                 ),
+                "scenario_group": scenario_group,
                 "created_at": created_at,
                 "seed": args.seed,
                 "episode_index": episode_index,
@@ -195,30 +306,65 @@ def collect(args: argparse.Namespace) -> Path:
                     "osrd_commit": OSRD_COMMIT,
                     "openapi_sha256": SCHEMA_SHA256,
                     "infra_id": args.infra_id,
-                    "timetable_id": timetable_id,
-                    "train_schedule_set_id": set_id,
+                    "baseline_timetable_id": baseline_arm["timetable_id"],
+                    "baseline_train_schedule_set_id": baseline_arm["train_schedule_set_id"],
+                    "treatment_timetable_id": treatment_arm["timetable_id"],
+                    "treatment_train_schedule_set_id": treatment_arm["train_schedule_set_id"],
+                    "infra_version": infra.get("version"),
+                    "infra_generated_version": infra.get("generated_version"),
+                    "rolling_stock_id": rolling_stock.get("id"),
+                    "rolling_stock_version": rolling_stock.get("version"),
                 },
-                "inputs": {"schedule_payloads": schedules, "perturbations": perturbations},
+                "inputs": {
+                    "scenario": {
+                        "scenario_group": scenario_group,
+                        "headway_s": episode_headway_s,
+                        "headway_options_s": headway_options,
+                        "infra_id": args.infra_id,
+                        "start_track": args.start_track,
+                        "start_offset": args.start_offset,
+                        "end_track": args.end_track,
+                        "end_offset": args.end_offset,
+                        "rolling_stock": args.rolling_stock,
+                    },
+                    "schedule_payloads": treatment_schedules,
+                    "baseline_schedule_payloads": baseline_schedules,
+                    "background_perturbations": dwell_inputs,
+                    "incident": {
+                        "type": "departure_delay",
+                        "train_index": incident_train_index,
+                        "delay_s": incident_delay_s,
+                    },
+                },
                 "outputs": {
-                    "schedule_ids": ids,
-                    "simulation_summaries": summaries,
-                    "conflicts": conflicts,
+                    "schedule_ids": treatment_ids,
+                    "simulation_summaries": treatment_summaries,
+                    "conflicts": treatment_arm["conflicts"],
+                    "paired": {
+                        "baseline": baseline_arm,
+                        "treatment": treatment_arm,
+                    },
                 },
                 "labels": {
                     "simulation_failed_train_ids": [
                         int(k)
-                        for k, result in summaries.items()
+                        for k, result in treatment_summaries.items()
                         if result.get("train_schedule", {}).get("status") not in (None, "success")
                     ],
                     "simulation_by_train_schedule_id": simulation_labels,
-                    "conflict_count": len(conflicts),
-                    "has_conflicts": bool(conflicts),
+                    "paired_by_train_index": paired_labels,
+                    "conflict_count": len(treatment_arm["conflicts"]),
+                    "has_conflicts": bool(treatment_arm["conflicts"]),
+                    "new_conflict_count": sum(
+                        int(label["new_conflict"]) for label in paired_labels
+                    ),
                 },
             }
         )
         print(
             f"episode {episode_index + 1}/{args.episodes}: "
-            f"timetable={timetable_id}, trains={len(ids)}, conflicts={len(conflicts)}"
+            f"scenario={scenario_group}, trains={len(treatment_ids)}, "
+            f"new_conflicts={sum(int(label['new_conflict']) for label in paired_labels)}"
         )
 
     output = Path(args.output)
@@ -239,7 +385,11 @@ def collect(args: argparse.Namespace) -> Path:
             ),
             "conflict_count": "Number of timetable conflict records returned by Editoast.",
             "has_conflicts": "Whether conflict_count is greater than zero.",
+            "arrival_delta_ms": "Treatment minus matched baseline simulated arrival time.",
+            "new_conflict": "Train is conflict-involved in treatment but not in baseline.",
         },
+        "paired_arms": True,
+        "scenario_group": scenario_group,
     }
     with (output / "episodes.jsonl").open("w", encoding="utf-8") as stream:
         for episode in episodes:
@@ -267,16 +417,24 @@ def main() -> None:
     parser.add_argument("--episodes", type=int, default=10)
     parser.add_argument("--trains", type=int, default=8)
     parser.add_argument("--headway-s", type=int, default=240)
+    parser.add_argument("--headway-options-s", type=int, nargs="+")
     parser.add_argument("--max-departure-shift-s", type=int, default=180)
     parser.add_argument("--max-dwell-s", type=int, default=120)
+    parser.add_argument("--min-incident-delay-s", type=int, default=60)
+    parser.add_argument("--max-incident-delay-s", type=int, default=300)
+    parser.add_argument("--scenario-group")
     args = parser.parse_args()
     if (
         min(args.episodes, args.trains, args.headway_s) <= 0
         or min(args.max_departure_shift_s, args.max_dwell_s) < 0
+        or args.min_incident_delay_s <= 0
+        or args.max_incident_delay_s < args.min_incident_delay_s
     ):
         parser.error(
             "episodes, trains, and headway must be positive; perturbation maxima cannot be negative"
         )
+    if args.headway_options_s and min(args.headway_options_s) <= 0:
+        parser.error("headway options must all be positive")
     print(f"Wrote replay data to {collect(args)}")
 
 

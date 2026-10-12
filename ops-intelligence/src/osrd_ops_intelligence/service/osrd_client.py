@@ -45,3 +45,4 @@ class OSRDClient(Protocol):
         candidate_payload: dict[str, object],
     ) -> CandidateValidation:
         """Validate a complete candidate timetable through OSRD."""
+        ...
