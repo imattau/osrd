@@ -1,0 +1,20 @@
+services:
+  ops-intelligence:
+    image: osrd-ops-intelligence:dev
+    container_name: osrd-ops-intelligence
+    build:
+      context: ./ops-intelligence
+      dockerfile: Dockerfile
+    ports:
+      - "8095:8095"
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "from urllib.request import urlopen; urlopen('http://localhost:8095/healthz', timeout=2)"
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
