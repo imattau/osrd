@@ -5,7 +5,7 @@ from fastapi import FastAPI, status
 from fastapi.responses import JSONResponse
 
 from osrd_ops_intelligence import __version__
-from osrd_ops_intelligence.contracts import PlanProblem, PlanningRequest
+from osrd_ops_intelligence.api.contracts import PlanningRequest, PlanProblem
 
 app = FastAPI(
     title="OSRD Operations Intelligence",
@@ -37,8 +37,7 @@ def create_plan(request: PlanningRequest) -> JSONResponse:
         content=PlanProblem(
             code="planning_not_configured",
             message=(
-                "The planning orchestrator is not implemented. No plan was generated "
-                "or applied."
+                "The planning orchestrator is not implemented. No plan was generated or applied."
             ),
             request_id=request.request_id,
         ).model_dump(mode="json"),
@@ -46,4 +45,4 @@ def create_plan(request: PlanningRequest) -> JSONResponse:
 
 
 def run() -> None:
-    uvicorn.run("osrd_ops_intelligence.api:app", host="0.0.0.0", port=8095)
+    uvicorn.run("osrd_ops_intelligence.service.app:app", host="0.0.0.0", port=8095)

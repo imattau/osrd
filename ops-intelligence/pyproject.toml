@@ -12,12 +12,14 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
   "pyright>=1.1,<2",
+  "pytest>=8,<9",
+  "httpx>=0.27,<1",
   "ruff>=0.9,<1",
 ]
 
 [project.scripts]
-osrd-ops-api = "osrd_ops_intelligence.api:run"
-osrd-replay-collect = "osrd_ops_intelligence.replay:main"
+osrd-ops-api = "osrd_ops_intelligence.service.app:run"
+osrd-replay-collect = "osrd_ops_intelligence.training.replay:main"
 
 [build-system]
 requires = ["hatchling>=1.26,<2"]
@@ -37,3 +39,8 @@ select = ["E", "F", "I", "UP", "B"]
 pythonVersion = "3.11"
 typeCheckingMode = "strict"
 include = ["src"]
+extraPaths = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

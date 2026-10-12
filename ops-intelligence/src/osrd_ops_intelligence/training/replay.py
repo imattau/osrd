@@ -23,7 +23,7 @@ OSRD_COMMIT = "26d19cb55bf18a26d2f0da7a9fc586c310d3ecf0"
 SCHEMA_SHA256 = "2164e74a522514e92c0b6fb6f252c7132e174b5a658e7aedf290fbf8e8d51b6b"
 EPISODE_SCHEMA = "osrd-ops-replay-episode/v1"
 SCHEMA_PATH = (
-    Path(__file__).resolve().parents[2] / "data_contracts" / "osrd" / OSRD_COMMIT / "openapi.yaml"
+    Path(__file__).resolve().parents[3] / "data_contracts" / "osrd" / OSRD_COMMIT / "openapi.yaml"
 )
 
 

@@ -9,13 +9,32 @@ slice is an offline replay collector: it creates isolated synthetic timetables i
 Editoast, records simulation summaries and conflict outputs, and writes seeded,
 version-bound JSONL episodes. It never edits a pre-existing operational timetable.
 
+## Layout
+
+```text
+src/osrd_ops_intelligence/
+  api/         internal request/response contracts (pydantic)
+  service/     FastAPI app and OSRD client boundary
+  features/    versioned feature transforms (placeholder)
+  models/      baselines and graph-temporal model (placeholder)
+  optimizer/   candidate generation, objectives (placeholder)
+  training/    replay collector; labels, splits, training (later)
+  registry/    model manifests, promotion metadata (placeholder)
+data_contracts/  pinned upstream OpenAPI artifacts
+tests/           unit and contract tests
+```
+
+Repo-level companions: `../ops-data/` (generators, manifests; no licensed data),
+`../tests/ai_operations/` (end-to-end OSRD fixture scenarios) and
+`../docs/{architecture,safety-case,runbooks}`.
+
 ## Local development
 
 Requires Python 3.11+ and `uv`.
 
 ```sh
 uv sync --extra dev
-uv run uvicorn osrd_ops_intelligence.api:app --app-dir src --reload --port 8095
+uv run uvicorn osrd_ops_intelligence.service.app:app --app-dir src --reload --port 8095
 ```
 
 OpenAPI is available at `http://localhost:8095/docs`; health is at
