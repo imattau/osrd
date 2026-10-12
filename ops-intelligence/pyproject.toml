@@ -20,6 +20,7 @@ dev = [
 [project.scripts]
 osrd-ops-api = "osrd_ops_intelligence.service.app:run"
 osrd-replay-collect = "osrd_ops_intelligence.training.replay:main"
+osrd-overlap-baseline = "osrd_ops_intelligence.training.overlap_baseline:main"
 
 [build-system]
 requires = ["hatchling>=1.26,<2"]

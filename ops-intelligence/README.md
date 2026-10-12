@@ -70,6 +70,24 @@ observed operational delay labels. Keep temporal/scenario splits grouped by
 episode and infrastructure, and do not train on synthetic episodes as if they
 were field outcomes.
 
+## Evaluate the overlap baseline
+
+The first transparent conflict-risk reference predicts that a train is conflict
+involved when its nearest departure is closer than a learned threshold. The
+threshold is tuned only on training episodes; a stable hash split holds out whole
+episodes. Pass separate source runs so sparse and dense scenarios remain
+traceable:
+
+```sh
+uv run osrd-overlap-baseline \
+  data/replays/run-001 data/replays/dense \
+  --test-fraction 0.2 \
+  --output data/replays/overlap-baseline-report.json
+```
+
+This is a physics-style benchmark, not a fitted production model. It reports a
+majority-class reference, test precision/recall/F1, and its exact episode split.
+
 ## Run beside the OSRD Compose stack
 
 From the repository root, build and start only this service:
