@@ -43,6 +43,8 @@ class Incident(StrictModel):
     ends_at: datetime
     confidence: float = Field(ge=0, le=1)
     source: str = Field(min_length=1)
+    delay_seconds: int | None = Field(default=None, ge=1, le=7200)
+    affected_train_schedule_ids: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def interval_is_valid_and_timezone_aware(self) -> "Incident":
@@ -50,6 +52,12 @@ class Incident(StrictModel):
             raise ValueError("incident timestamps must include a timezone")
         if self.ends_at <= self.starts_at:
             raise ValueError("ends_at must be later than starts_at")
+        if len(set(self.affected_train_schedule_ids)) != len(self.affected_train_schedule_ids):
+            raise ValueError("affected_train_schedule_ids must be unique")
+        if self.kind != IncidentKind.DELAY and (
+            self.delay_seconds is not None or self.affected_train_schedule_ids
+        ):
+            raise ValueError("delay details may only be supplied for delay incidents")
         return self
 
 
@@ -57,7 +65,13 @@ class SnapshotBinding(StrictModel):
     infra_id: str = Field(min_length=1)
     infra_version: str = Field(min_length=1)
     timetable_id: str = Field(min_length=1)
-    timetable_revision: str = Field(min_length=1)
+    timetable_revision: str = Field(
+        min_length=1,
+        description=(
+            "SHA-256 of canonical JSON containing timetable type and sorted source train "
+            "schedule IDs, set IDs, and create-form payloads; formatted as sha256:<hex>."
+        ),
+    )
     osrd_version: str = Field(min_length=1)
 
 
@@ -89,3 +103,32 @@ class PlanProblem(StrictModel):
     code: str
     message: str
     request_id: UUID | None = None
+
+
+class PlanCandidateEdit(StrictModel):
+    train_schedule_id: str
+    before_start_time_ms: int
+    after_start_time_ms: int
+    shift_seconds: int
+
+
+class PlanCandidateValidation(StrictModel):
+    pathfinding_valid: bool
+    simulation_valid: bool
+    conflict_count: int | None
+    failure_reasons: list[str]
+
+
+class PlanCandidateResult(StrictModel):
+    candidate_id: str
+    edits: list[PlanCandidateEdit]
+    total_shift_seconds: int
+    validation: PlanCandidateValidation
+
+
+class PlanningResponse(StrictModel):
+    request_id: UUID
+    snapshot: SnapshotBinding
+    generated_candidate_count: int
+    candidates: list[PlanCandidateResult]
+    rejected_candidates: list[PlanCandidateResult]

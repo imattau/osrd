@@ -1,1 +1,1 @@
-"""Candidate generation and constrained objectives. Not implemented yet."""
+"""Candidate generation and constrained objectives."""

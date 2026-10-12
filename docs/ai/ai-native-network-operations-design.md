@@ -259,6 +259,10 @@ The first code change should be an **offline replay prototype**, not a new model
 
 This ordering tests the core hypothesis—whether OSRD plus available operations data can support useful, generalizable predictions—before creating a production service boundary.
 
+The first planning-core increment is a deterministic departure-shift proposal generator for incident-affected schedules. It excludes protected trains, caps each shift and candidate count, and binds candidate IDs to the full infrastructure, timetable, and OSRD version snapshot. These proposals are deltas only: the service must apply each to an isolated full timetable and use OSRD's simulation and conflict outputs before any plan can be returned.
+
+The follow-on integration slice now reads timetable-to-schedule-set relationships from the pinned Editoast route, copies all regular schedules into temporary unpublished records, validates them with simulation summaries and conflict detection, and cleans up the candidate records. A local Editoast run validated a bounded delay candidate with zero conflicts while leaving the source timetable revision unchanged. Paced schedules remain unsupported until their exceptions can be faithfully copied and validated.
+
 ## 12. Assumptions, risks, and unresolved decisions
 
 - Public documentation is not a substitute for checking the exact chosen `dev` SHA. Editoast endpoints and DTOs evolve; regenerate API clients and schema bindings from that checkout.

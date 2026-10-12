@@ -3,9 +3,9 @@
 Initial scaffold for the advisory planning service described in
 [`docs/ai/ai-native-network-operations-design.md`](../docs/ai/ai-native-network-operations-design.md).
 
-This service is deliberately isolated from OSRD core. The planning API remains a
-typed shell and does not generate or apply candidate plans. The first implementation
-slice is an offline replay collector: it creates isolated synthetic timetables in
+This service is deliberately isolated from OSRD core. Its planning API generates
+advisory candidates, validates them through OSRD, and never applies them to an
+operational timetable. The first implementation slice was an offline replay collector: it creates isolated synthetic timetables in
 Editoast, records simulation summaries and conflict outputs, and writes seeded,
 version-bound JSONL episodes. It never edits a pre-existing operational timetable.
 
@@ -39,6 +39,25 @@ uv run uvicorn osrd_ops_intelligence.service.app:app --app-dir src --reload --po
 
 OpenAPI is available at `http://localhost:8095/docs`; health is at
 `http://localhost:8095/healthz`.
+
+## Validate bounded timetable candidates
+
+The planning route supports delay incidents with an explicit delay and affected
+train-schedule IDs. It creates bounded departure-shift candidates, clones the
+complete regular-schedule set into a temporary unpublished timetable, runs
+OSRD simulation summaries and conflict detection, deletes the temporary records,
+and returns accepted and rejected candidates. It never edits or publishes the
+source timetable. Obtain the current exact binding first with
+`GET /v1/operations/snapshots/{infra_id}/{timetable_id}`; its timetable revision
+is a SHA-256 over the normalized OSRD train-schedule forms.
+
+Configure `OSRD_EDITOAST_URL` (for the repository Compose network,
+`http://gateway:4000/api`) and, where needed, `OSRD_AUTHORIZATION`. The adapter
+reads the source timetable's linked schedule sets from Editoast and
+copies every regular schedule into the isolated candidate. Paced trains are
+rejected because their exceptions are not copied by this initial adapter.
+The current planner supports delay incidents only; closures, speed restrictions,
+and rolling-stock changes need separate candidate strategies.
 
 ## Collect a seeded replay dataset
 
@@ -191,8 +210,14 @@ hyperparameter selection.
 - Planning request models require timezone-aware timestamps and explicit snapshot
   bindings (`infra_version`, `timetable_revision`, `osrd_version`).
 - Unknown request fields are rejected to make contract changes explicit.
-- `OSRDClient` is a protocol, not a live client. A future implementation must
-  validate the complete candidate timetable through OSRD and preserve the exact
-  snapshot binding.
+- `EditoastOSRDClient` reads and binds the source timetable, validates complete
+  isolated candidates against OSRD simulation and conflict APIs, and removes its
+  temporary timetable and schedule set. It does not apply a recommendation.
+- `optimizer.departure_shifts` now generates deterministic, bounded departure
+  shift edits for explicitly affected schedules, excluding protected services.
+  Candidate IDs bind the complete infrastructure, timetable, and OSRD version
+  snapshot. It returns deltas, not a replacement timetable or a claim that
+  service will improve. Only candidates that pass the complete-timetable OSRD
+  simulation and conflict checks are returned as accepted.
 - No model artifacts, operational data, database connection, or OSRD credentials
   are included in this scaffold.
