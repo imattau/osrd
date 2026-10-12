@@ -3,11 +3,11 @@
 Initial scaffold for the advisory planning service described in
 [`docs/ai/ai-native-network-operations-design.md`](../docs/ai/ai-native-network-operations-design.md).
 
-This service is deliberately isolated from OSRD core. The current implementation
-provides a typed API shell and health endpoint only; it does not forecast delays,
-generate candidate plans, call Editoast, or apply timetable changes. The plan
-endpoint returns `501 planning_not_configured` until the orchestration and OSRD
-adapter are implemented.
+This service is deliberately isolated from OSRD core. The planning API remains a
+typed shell and does not generate or apply candidate plans. The first implementation
+slice is an offline replay collector: it creates isolated synthetic timetables in
+Editoast, records simulation summaries and conflict outputs, and writes seeded,
+version-bound JSONL episodes. It never edits a pre-existing operational timetable.
 
 ## Local development
 
@@ -20,6 +20,36 @@ uv run uvicorn osrd_ops_intelligence.api:app --app-dir src --reload --port 8095
 
 OpenAPI is available at `http://localhost:8095/docs`; health is at
 `http://localhost:8095/healthz`.
+
+## Collect a seeded replay dataset
+
+Start the OSRD stack and import an infrastructure and rolling stock first. The
+collector defaults to the local gateway's Editoast route (`http://localhost:4000/api`):
+
+```sh
+uv run osrd-replay-collect \
+  --infra-id 1 \
+  --rolling-stock fast_rolling_stock \
+  --start-track TC0 --start-offset 185000 \
+  --end-track TD0 --end-offset 24820000 \
+  --seed 42 --episodes 10 --trains 8 \
+  --output data/replays/run-001
+```
+
+The executable checks the pinned OpenAPI artifact's SHA-256 before making API
+calls. It creates new unpublished timetable and train-schedule-set records for
+every episode. `manifest.json` captures run parameters and content hash;
+`episodes.jsonl` records exact schedule inputs, Editoast simulation outputs,
+conflicts, and derived labels. `simulation_by_train_schedule_id` preserves status,
+travel time, energy and path-item times; `conflict_count` and `has_conflicts` are
+labels. JSONL is the initial portable interchange format; promotion to Parquet is
+deferred until feature columns and stable nullability are agreed.
+
+The collector is intentionally a data-generation baseline, not an optimizer. Its
+departure shifts and destination dwell values are synthetic perturbations, not
+observed operational delay labels. Keep temporal/scenario splits grouped by
+episode and infrastructure, and do not train on synthetic episodes as if they
+were field outcomes.
 
 ## Run beside the OSRD Compose stack
 

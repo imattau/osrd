@@ -17,6 +17,7 @@ dev = [
 
 [project.scripts]
 osrd-ops-api = "osrd_ops_intelligence.api:run"
+osrd-replay-collect = "osrd_ops_intelligence.replay:main"
 
 [build-system]
 requires = ["hatchling>=1.26,<2"]
