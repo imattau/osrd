@@ -26,6 +26,20 @@ def test_candidate_validation_copies_linked_schedules_and_cleans_up() -> None:
             "path": [{"track": "A", "offset": 0}],
             "constraint_distribution": {"distribution": "MARECO"},
             "comfort": "STANDARD",
+            "paced": {
+                "time_window": "PT2H",
+                "interval": "PT15M",
+                "exceptions": [
+                    {
+                        "id": 777,
+                        "key": "source-exception",
+                        "occurrence_index": 1,
+                        "disabled": False,
+                        "labels": {"value": ["exception-label"]},
+                        "start_time": {"value": 3_000},
+                    }
+                ],
+            },
         },
         {
             "id": 32,
@@ -39,6 +53,7 @@ def test_candidate_validation_copies_linked_schedules_and_cleans_up() -> None:
         },
     ]
     calls: list[tuple[str, str, Any]] = []
+    created_schedule_ids: dict[str, int] = {}
 
     class Handler(BaseHTTPRequestHandler):
         def _respond(self, body: Any = None, status: int = 200) -> None:
@@ -81,16 +96,30 @@ def test_candidate_validation_copies_linked_schedules_and_cleans_up() -> None:
             if self.path == "/timetable/900/train_schedule_sets":
                 return self._respond(None, 204)
             if self.path == "/train_schedule_sets/901/train_schedules":
-                return self._respond(
-                    [{"id": 9001 + index} for index, _ in enumerate(body)], 201
-                )
+                created = []
+                for form in body:
+                    new_id = 9002 if form["train_name"] == "service-31" else 9001
+                    created_schedule_ids[form["train_name"]] = new_id
+                    created.append({"id": new_id})
+                return self._respond(created, 201)
+            if self.path == "/timetable/900/train_schedule_exception":
+                assert body["train_schedule_id"] == 9002
+                assert body["occurrence_index"] == 1
+                assert body["change_groups"]["labels"] == {"value": ["exception-label"]}
+                assert body["change_groups"]["start_time"] == {"value": 63_000}
+                return self._respond({"id": 9100}, 200)
             if self.path == "/train_schedules/simulation_summary":
-                return self._respond(
-                    {
-                        str(schedule_id): {"train_schedule": {"status": "success"}}
-                        for schedule_id in body["ids"]
+                response = {}
+                for schedule_id in body["ids"]:
+                    response[str(schedule_id)] = {
+                        "train_schedule": {"status": "success"},
+                        "exceptions": (
+                            {"9100": {"status": "success"}}
+                            if schedule_id == 9002
+                            else {}
+                        ),
                     }
-                )
+                return self._respond(response)
             self._respond({"error": f"unexpected POST {self.path}"}, 404)
 
         def do_DELETE(self) -> None:
@@ -136,14 +165,26 @@ def test_candidate_validation_copies_linked_schedules_and_cleans_up() -> None:
         server.server_close()
 
     assert result.validated
-    copied = next(
-        body
+    copies = [
+        form
         for method, path, body in calls
         if method == "POST" and path == "/train_schedule_sets/901/train_schedules"
-    )
-    assert len(copied) == 2
-    assert {form["train_name"] for form in copied} == {"service-31", "service-32"}
-    assert copied[0]["start_time"] == 61_000
+        for form in body
+    ]
+    assert len(copies) == 2
+    assert {form["train_name"] for form in copies} == {"service-31", "service-32"}
+    copied_paced = next(form for form in copies if form["train_name"] == "service-31")
+    assert copied_paced["start_time"] == 61_000
+    assert copied_paced["paced"]["exceptions"] == []
+    exception_calls = [
+        body
+        for method, path, body in calls
+        if method == "POST" and path == "/timetable/900/train_schedule_exception"
+    ]
+    assert len(exception_calls) == 1
+    assert exception_calls[0]["train_schedule_id"] == created_schedule_ids["service-31"]
+    assert exception_calls[0]["change_groups"]["labels"]["value"] == ["exception-label"]
+    assert exception_calls[0]["change_groups"]["start_time"]["value"] == 63_000
     assert ("DELETE", "/timetable/900", None) in calls
     assert ("DELETE", "/train_schedule_sets/901", None) in calls
 

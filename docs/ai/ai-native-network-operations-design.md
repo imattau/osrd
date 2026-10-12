@@ -261,7 +261,7 @@ This ordering tests the core hypothesis—whether OSRD plus available operations
 
 The first planning-core increment is a deterministic departure-shift proposal generator for incident-affected schedules. It excludes protected trains, caps each shift and candidate count, and binds candidate IDs to the full infrastructure, timetable, and OSRD version snapshot. These proposals are deltas only: the service must apply each to an isolated full timetable and use OSRD's simulation and conflict outputs before any plan can be returned.
 
-The follow-on integration slice now reads timetable-to-schedule-set relationships from the pinned Editoast route, copies all regular schedules into temporary unpublished records, validates them with simulation summaries and conflict detection, and cleans up the candidate records. A local Editoast run validated a bounded delay candidate with zero conflicts while leaving the source timetable revision unchanged. Paced schedules remain unsupported until their exceptions can be faithfully copied and validated.
+The follow-on integration slice reads timetable-to-schedule-set relationships from the pinned Editoast route, copies all regular and paced schedules into temporary unpublished records, recreates paced exceptions against candidate schedule IDs, validates base and exception simulation summaries plus conflict detection, and cleans up the candidate records. Explicit exception departure times shift with their parent paced schedule. A local OSRD run validated a paced candidate with one modified occurrence and zero conflicts; the temporary candidate records were removed and the source revision remained unchanged.
 
 ## 12. Assumptions, risks, and unresolved decisions
 

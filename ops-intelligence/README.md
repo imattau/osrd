@@ -53,11 +53,12 @@ is a SHA-256 over the normalized OSRD train-schedule forms.
 
 Configure `OSRD_EDITOAST_URL` (for the repository Compose network,
 `http://gateway:4000/api`) and, where needed, `OSRD_AUTHORIZATION`. The adapter
-reads the source timetable's linked schedule sets from Editoast and
-copies every regular schedule into the isolated candidate. Paced trains are
-rejected because their exceptions are not copied by this initial adapter.
-The current planner supports delay incidents only; closures, speed restrictions,
-and rolling-stock changes need separate candidate strategies.
+reads the source timetable's linked schedule sets from Editoast and copies every
+regular and paced schedule into the isolated candidate. Paced-train exceptions
+are recreated against the new schedule IDs, and explicit exception departure
+times shift with their parent candidate. The current planner supports delay
+incidents only; closures, speed restrictions, and rolling-stock changes need
+separate candidate strategies.
 
 ## Collect a seeded replay dataset
 
