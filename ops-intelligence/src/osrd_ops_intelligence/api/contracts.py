@@ -2,6 +2,7 @@
 
 from datetime import datetime
 from enum import StrEnum
+from math import isfinite
 from typing import Literal
 from uuid import UUID, uuid4
 
@@ -19,6 +20,12 @@ class IncidentKind(StrEnum):
     TRACK_CLOSURE = "track_closure"
     SPEED_RESTRICTION = "speed_restriction"
     ROLLING_STOCK_UNAVAILABLE = "rolling_stock_unavailable"
+
+
+class PlanningObjective(StrEnum):
+    MINIMIZE_TOTAL_SHIFT = "minimize_total_shift"
+    MINIMIZE_CHANGED_SERVICES = "minimize_changed_services"
+    MINIMIZE_WEIGHTED_SHIFT = "minimize_weighted_shift"
 
 
 class AffectedResource(StrictModel):
@@ -44,7 +51,7 @@ class Incident(StrictModel):
     confidence: float = Field(ge=0, le=1)
     source: str = Field(min_length=1)
     delay_seconds: int | None = Field(default=None, ge=1, le=7200)
-    affected_train_schedule_ids: list[str] = Field(default_factory=list)
+    affected_train_schedule_ids: list[str] = Field(default_factory=list, max_length=500)
 
     @model_validator(mode="after")
     def interval_is_valid_and_timezone_aware(self) -> "Incident":
@@ -78,7 +85,23 @@ class SnapshotBinding(StrictModel):
 class PlanningPolicy(StrictModel):
     max_candidates: int = Field(default=10, ge=1, le=50)
     max_departure_shift_seconds: int = Field(default=900, ge=0, le=7200)
-    protected_train_schedule_ids: list[str] = Field(default_factory=list)
+    protected_train_schedule_ids: list[str] = Field(default_factory=list, max_length=500)
+    objective: PlanningObjective = PlanningObjective.MINIMIZE_TOTAL_SHIFT
+    schedule_priority_weights: dict[str, float] = Field(default_factory=dict, max_length=500)
+
+    @model_validator(mode="after")
+    def objective_weights_are_valid(self) -> "PlanningPolicy":
+        if len(set(self.protected_train_schedule_ids)) != len(self.protected_train_schedule_ids):
+            raise ValueError("protected_train_schedule_ids must be unique")
+        for schedule_id, weight in self.schedule_priority_weights.items():
+            if not schedule_id or not isfinite(weight) or weight <= 0 or weight > 1000:
+                raise ValueError("schedule priority weights must be finite values in (0, 1000]")
+        if self.objective == PlanningObjective.MINIMIZE_WEIGHTED_SHIFT:
+            if not self.schedule_priority_weights:
+                raise ValueError("minimize_weighted_shift requires explicit schedule priorities")
+        elif self.schedule_priority_weights:
+            raise ValueError("schedule_priority_weights require minimize_weighted_shift")
+        return self
 
 
 class PlanningRequest(StrictModel):
@@ -123,12 +146,15 @@ class PlanCandidateResult(StrictModel):
     candidate_id: str
     edits: list[PlanCandidateEdit]
     total_shift_seconds: int
+    objective_score: float = Field(ge=0)
     validation: PlanCandidateValidation
 
 
 class PlanningResponse(StrictModel):
     request_id: UUID
     snapshot: SnapshotBinding
+    objective: PlanningObjective
     generated_candidate_count: int
+    evaluated_candidate_count: int
     candidates: list[PlanCandidateResult]
     rejected_candidates: list[PlanCandidateResult]

@@ -60,6 +60,14 @@ times shift with their parent candidate. The current planner supports delay
 incidents only; closures, speed restrictions, and rolling-stock changes need
 separate candidate strategies.
 
+`policy.objective` ranks OSRD-validated candidates using `minimize_total_shift`
+(default), `minimize_changed_services`, or `minimize_weighted_shift`. For the
+weighted objective, provide a positive `schedule_priority_weights` value for
+every affected, unprotected schedule; larger values make shifting that service
+less desirable. `protected_train_schedule_ids` are excluded from every candidate,
+not merely penalized. The response echoes the objective and each candidate's
+score, and reports both the proposal-pool size and the number actually validated.
+
 ## Collect a seeded replay dataset
 
 Start the OSRD stack and import an infrastructure and rolling stock first. The

@@ -263,6 +263,8 @@ The first planning-core increment is a deterministic departure-shift proposal ge
 
 The follow-on integration slice reads timetable-to-schedule-set relationships from the pinned Editoast route, copies all regular and paced schedules into temporary unpublished records, recreates paced exceptions against candidate schedule IDs, validates base and exception simulation summaries plus conflict detection, and cleans up the candidate records. Explicit exception departure times shift with their parent paced schedule. A local OSRD run validated a paced candidate with one modified occurrence and zero conflicts; the temporary candidate records were removed and the source revision remained unchanged.
 
+Candidate selection now supports explicit operator objectives: minimize total shift, minimize the number of changed services, or minimize priority-weighted shift. Weighted ranking requires a positive priority for each affected unprotected service; protected services remain excluded from candidate generation. The API reports the selected objective, per-candidate score, total proposal count, and validation count so operator policy and validation effort are auditable.
+
 ## 12. Assumptions, risks, and unresolved decisions
 
 - Public documentation is not a substitute for checking the exact chosen `dev` SHA. Editoast endpoints and DTOs evolve; regenerate API clients and schema bindings from that checkout.
