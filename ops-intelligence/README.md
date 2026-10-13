@@ -89,6 +89,66 @@ journal path. Compose mounts a persistent named volume. This append-only adapter
 for the fork prototype; production should write authoritative audit records through
 Editoast persistence and include the authenticated operator identity.
 
+## Prepare public rail data for forecasting
+
+Dataset research, model-track separation, forecast target/split rules, license notes,
+and the exact first training experiment are documented in
+[`docs/ai/training-data-and-model-readiness.md`](../docs/ai/training-data-and-model-readiness.md).
+RIDE Gold Lite provides a pinned Belgian train/test forecasting dataset; Swiss Actual
+data and GTFS are assessed as later cross-network sources. Neither replaces OSRD
+candidate-validation outcomes for the planning feasibility ranker below. The pinned
+training split can be fetched locally with SHA-256 verification; interrupted downloads
+resume through Hugging Face's Xet cache. RIDE lists its complete
+tabular tree at 7.26 GB; the command fetches only the training arrays and schema, not
+the held-out arrays or sequential/graph representations:
+
+Install the optional data dependencies, then run the fetcher:
+
+```sh
+uv sync --extra rail-data
+uv run osrd-ride-fetch-training
+```
+
+The downloader uses Hugging Face's Xet-aware client for adaptive parallel transfer,
+terminal progress reporting, and resumable Xet cache state. If Xet reports a known CAS
+response-decoding/reconstruction failure, it falls back to a resumable HTTPS range
+transfer with bounded retries. A Hugging Face token is not required for this public
+dataset, but is recommended for a multi-gigabyte fetch: the Hub warns that anonymous
+requests have lower limits and may be slower. A configured `HF_TOKEN` or saved login
+is used automatically. SHA-256 hashes are verified before data is accepted. Any `.part`
+file left by the older single-stream downloader is not reused by Xet and is removed
+only after the replacement verifies successfully.
+
+To fit the bounded CPU baseline after acquisition, install the numeric extra and run:
+
+```sh
+uv sync --extra rail-data
+uv run osrd-ride-train --output-dir data/rail/ride-forecast-model
+```
+
+The trainer verifies every pinned input, memory-maps the 5.7 GB feature matrix, samples
+up to 20,000 training and 5,000 validation rows, and groups its chronological split by
+service date (default cutoff 2024-10-01). It optimizes only valid targets and does not
+load or score the 2025 holdout. Its report compares each horizon with a target mean
+computed only from training rows, includes signed bias, and breaks validation metrics
+out by service month to expose temporal variation. Metrics are in provider-normalized
+target units; see the readiness plan for interpretation and limitations.
+
+The trainer can also fit the first neural baseline, a small feed-forward MLP over the
+same RIDE tabular features. It uses train-only feature standardization, two ReLU hidden
+layers by default, Adam, L2 regularization, and a validity-masked multi-horizon loss:
+
+```sh
+uv run osrd-ride-train --model mlp \
+  --output-dir data/rail/ride-forecast-mlp \
+  --max-train-rows 20000 --max-validation-rows 5000
+```
+
+Use the same split, seed, and row limits for the linear comparison. This MLP does not
+consume railway topology or event sequences, so it is not the graph-temporal model
+specified in the architecture design. Keep it an offline experiment until it beats the
+linear and persistence references on a frozen holdout and receives review.
+
 ## Prepare planning outcomes for a learned feasibility ranker
 
 Export completed-plan alternatives and OSRD validation labels from the audit

@@ -17,6 +17,7 @@ dev = [
   "ruff>=0.9,<1",
 ]
 rail-data = [
+  "huggingface_hub>=0.32,<2",
   "numpy>=2,<3",
   "pyarrow>=22,<27",
 ]
@@ -27,6 +28,8 @@ osrd-replay-collect = "osrd_ops_intelligence.training.replay:main"
 osrd-overlap-baseline = "osrd_ops_intelligence.training.overlap_baseline:main"
 osrd-replay-train = "osrd_ops_intelligence.training.train_replay:main"
 osrd-ride-fetch-core = "osrd_ops_intelligence.training.ride_core:main"
+osrd-ride-fetch-training = "osrd_ops_intelligence.training.ride_training_data:main"
+osrd-ride-train = "osrd_ops_intelligence.training.train_ride_forecast:main"
 osrd-ride-baseline = "osrd_ops_intelligence.training.ride_baseline:main"
 osrd-plan-ranker-data = "osrd_ops_intelligence.training.plan_ranker_data:main"
 osrd-plan-ranker-train = "osrd_ops_intelligence.training.train_plan_ranker:main"

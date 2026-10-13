@@ -1,1 +1,1 @@
-"""Delay forecast baselines and the graph-temporal model. Not implemented yet."""
+"""Delay forecast baselines and an initial tabular neural forecaster."""
