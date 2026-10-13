@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from dataclasses import asdict
 from typing import Any
+from uuid import UUID
 
 import uvicorn
 from fastapi import FastAPI, status
@@ -12,6 +13,7 @@ from fastapi.responses import JSONResponse
 
 from osrd_ops_intelligence import __version__
 from osrd_ops_intelligence.api.contracts import (
+    PlanAuditRecord,
     PlanningRequest,
     PlanningResponse,
     PlanProblem,
@@ -22,6 +24,11 @@ from osrd_ops_intelligence.service.osrd_client import (
     EditoastOSRDClient,
     OSRDClient,
     UnsupportedSnapshot,
+)
+from osrd_ops_intelligence.service.plan_audit import (
+    AuditConflict,
+    AuditStoreError,
+    PlanAuditStore,
 )
 from osrd_ops_intelligence.service.planning import PlanningInputError, plan
 
@@ -40,9 +47,7 @@ def _client_from_environment() -> OSRDClient | None:
     )
 
 
-def _problem(
-    code: str, message: str, request: PlanningRequest, status_code: int
-) -> JSONResponse:
+def _problem(code: str, message: str, request: PlanningRequest, status_code: int) -> JSONResponse:
     payload = PlanProblem(
         code=code,
         message=message,
@@ -55,12 +60,14 @@ def create_app(osrd_client: OSRDClient | None = None) -> FastAPI:
     """Build the API with an optional OSRD adapter; absent configuration fails closed."""
 
     configured_client = osrd_client if osrd_client is not None else _client_from_environment()
+    audit_store = PlanAuditStore(os.getenv("OSRD_OPS_AUDIT_DB", "data/plan-audit.sqlite3"))
     application = FastAPI(
         title="OSRD Operations Intelligence",
         version=__version__,
         description=(
-            "Advisory timetable candidate service. It only returns candidates that "
-            "pass OSRD simulation and conflict checks; it never applies a plan."
+            "Advisory delay-recovery service. It validates the unchanged baseline and "
+            "edited candidates through OSRD, separates accepted and rejected results, "
+            "and never applies a plan."
         ),
     )
 
@@ -116,11 +123,22 @@ def create_app(osrd_client: OSRDClient | None = None) -> FastAPI:
             status.HTTP_422_UNPROCESSABLE_ENTITY: {"model": PlanProblem},
             status.HTTP_501_NOT_IMPLEMENTED: {"model": PlanProblem},
             status.HTTP_502_BAD_GATEWAY: {"model": PlanProblem},
+            status.HTTP_503_SERVICE_UNAVAILABLE: {"model": PlanProblem},
         },
         tags=["planning"],
         summary="Generate and OSRD-validate delay-recovery candidates",
     )
     async def create_plan(request: PlanningRequest) -> Any:
+        try:
+            previous = audit_store.replay(request)
+            if previous is not None:
+                return previous.result
+        except AuditConflict as error:
+            return _problem("request_id_conflict", str(error), request, status.HTTP_409_CONFLICT)
+        except AuditStoreError as error:
+            return _problem(
+                "audit_store_unavailable", str(error), request, status.HTTP_503_SERVICE_UNAVAILABLE
+            )
         if configured_client is None:
             return _problem(
                 "planning_not_configured",
@@ -129,7 +147,8 @@ def create_app(osrd_client: OSRDClient | None = None) -> FastAPI:
                 status.HTTP_501_NOT_IMPLEMENTED,
             )
         try:
-            return await plan(request, configured_client)
+            result = await plan(request, configured_client)
+            return audit_store.record(request, result).result
         except PlanningInputError as error:
             return _problem(
                 "planning_inputs_incomplete",
@@ -149,6 +168,41 @@ def create_app(osrd_client: OSRDClient | None = None) -> FastAPI:
             return _problem(
                 "planning_inputs_invalid", str(error), request, status.HTTP_422_UNPROCESSABLE_ENTITY
             )
+        except AuditConflict as error:
+            return _problem("request_id_conflict", str(error), request, status.HTTP_409_CONFLICT)
+        except AuditStoreError as error:
+            return _problem(
+                "audit_store_unavailable", str(error), request, status.HTTP_503_SERVICE_UNAVAILABLE
+            )
+
+    @application.get(
+        "/v1/operations/plans/{request_id}",
+        response_model=PlanAuditRecord | PlanProblem,
+        responses={
+            status.HTTP_404_NOT_FOUND: {"model": PlanProblem},
+            status.HTTP_503_SERVICE_UNAVAILABLE: {"model": PlanProblem},
+        },
+        tags=["planning"],
+        summary="Retrieve an immutable completed planning record",
+    )
+    async def get_plan_record(request_id: UUID) -> Any:
+        try:
+            record = audit_store.get(request_id)
+        except AuditStoreError as error:
+            payload = PlanProblem(code="audit_store_unavailable", message=str(error))
+            return JSONResponse(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                content=payload.model_dump(mode="json"),
+            )
+        if record is None:
+            payload = PlanProblem(
+                code="plan_not_found", message="No completed plan has this request_id."
+            )
+            return JSONResponse(
+                status_code=status.HTTP_404_NOT_FOUND,
+                content=payload.model_dump(mode="json"),
+            )
+        return record
 
     return application
 

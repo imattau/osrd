@@ -70,11 +70,14 @@ def test_weighted_objective_ranks_lower_priority_cost_first() -> None:
     response = asyncio.run(plan(request, client))
 
     assert response.objective == "minimize_weighted_shift"
+    assert response.baseline.strategy == "pass_through_rules_v1"
+    assert response.baseline.edits == []
     assert response.generated_candidate_count == 3
     assert response.evaluated_candidate_count == 1
     assert response.candidates[0].edits[0].train_schedule_id == "202"
     assert response.candidates[0].objective_score == 60.0
-    assert len(client.validated_candidate_ids) == 1
+    assert len(client.validated_candidate_ids) == 2
+    assert client.validated_candidate_ids[0].startswith("pass-through-")
 
 
 def test_protected_services_are_excluded_before_ranking() -> None:

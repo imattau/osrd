@@ -63,6 +63,7 @@ def generate_departure_shift_candidates(
     max_departure_shift_seconds: int,
     max_candidates: int,
     step_seconds: int = 60,
+    max_shift_seconds_by_schedule: Mapping[str, int] | None = None,
 ) -> list[DepartureShiftCandidate]:
     """Propose small positive retimings for delayed trains, never protected ones.
 
@@ -89,16 +90,36 @@ def generate_departure_shift_candidates(
     if unknown:
         raise ValueError(f"Affected schedules are missing from the snapshot: {sorted(unknown)}")
     eligible = sorted(affected - set(protected_schedule_ids))
-    options = _shift_options(delay_seconds, max_departure_shift_seconds, step_seconds)
-    if not eligible or not options:
+    per_schedule_maximum = max_shift_seconds_by_schedule or {}
+    for schedule_id, maximum in per_schedule_maximum.items():
+        if not schedule_id or isinstance(maximum, bool) or not 0 <= maximum <= 7200:
+            raise ValueError("per-schedule shift limits must be integer values in [0, 7200]")
+    unknown_limits = set(per_schedule_maximum) - set(schedule_start_times_ms)
+    if unknown_limits:
+        raise ValueError(f"Shift limits reference missing schedules: {sorted(unknown_limits)}")
+    options_by_schedule = {
+        schedule_id: _shift_options(
+            delay_seconds,
+            min(
+                max_departure_shift_seconds,
+                per_schedule_maximum.get(schedule_id, max_departure_shift_seconds),
+            ),
+            step_seconds,
+        )
+        for schedule_id in eligible
+    }
+    if not eligible or not any(options_by_schedule.values()):
         return []
 
     proposals: set[tuple[tuple[str, int], ...]] = set()
     for schedule_id in eligible:
-        for shift_seconds in options:
+        for shift_seconds in options_by_schedule[schedule_id]:
             proposals.add(((schedule_id, shift_seconds),))
     if len(eligible) > 1:
-        for shift_seconds in options:
+        common_options = set(options_by_schedule[eligible[0]])
+        for schedule_id in eligible[1:]:
+            common_options.intersection_update(options_by_schedule[schedule_id])
+        for shift_seconds in sorted(common_options):
             proposals.add(tuple((schedule_id, shift_seconds) for schedule_id in eligible))
 
     ordered = sorted(proposals, key=lambda edits: (len(edits), sum(v for _, v in edits), edits))

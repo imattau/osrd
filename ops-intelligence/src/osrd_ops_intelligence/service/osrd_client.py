@@ -114,11 +114,7 @@ def _exception_change_groups(exception: dict[str, Any]) -> dict[str, Any]:
         raise UnsupportedSnapshot(
             f"Paced exception contains unsupported fields: {sorted(unknown_fields)}"
         )
-    return {
-        key: exception[key]
-        for key in _EXCEPTION_CHANGE_GROUP_FIELDS
-        if key in exception
-    }
+    return {key: exception[key] for key in _EXCEPTION_CHANGE_GROUP_FIELDS if key in exception}
 
 
 def _schedule_form(schedule: dict[str, Any]) -> dict[str, Any]:
@@ -141,9 +137,7 @@ def _schedule_form(schedule: dict[str, Any]) -> dict[str, Any]:
     return form
 
 
-def compute_timetable_revision(
-    timetable_type: str, schedules: list[dict[str, Any]]
-) -> str:
+def compute_timetable_revision(timetable_type: str, schedules: list[dict[str, Any]]) -> str:
     """Hash normalized schedule forms and their source identities for snapshot binding."""
 
     normalized: list[dict[str, Any]] = [
@@ -299,12 +293,12 @@ class EditoastOSRDClient:
             raise UnsupportedSnapshot("Candidate snapshot binding differs from validation request")
         edits = candidate_payload.get("edits")
         candidate_id = candidate_payload.get("candidate_id")
-        if not isinstance(edits, list) or not isinstance(candidate_id, str):
-            raise ValueError("Candidate payload must include an ID and non-empty edits")
+        if not isinstance(edits, list) or not isinstance(candidate_id, str) or not candidate_id:
+            raise ValueError("Candidate payload must include an ID and an edits list")
         edit_rows = cast(list[object], edits)
-        if not edit_rows:
-            raise ValueError("Candidate payload must include an ID and non-empty edits")
 
+        # An empty edit list is the pass-through baseline: clone and validate the
+        # exact source timetable through the same OSRD checks as edited candidates.
         timetable_type, source_schedules = self._load_source(snapshot)
         source_by_id = {str(schedule["id"]): schedule for schedule in source_schedules}
         if len(source_by_id) != len(source_schedules):
@@ -357,9 +351,8 @@ class EditoastOSRDClient:
                             )
                         start_group = cast(dict[str, Any], start_time_group)
                         exception_start = start_group.get("value")
-                        if (
-                            not isinstance(exception_start, int)
-                            or isinstance(exception_start, bool)
+                        if not isinstance(exception_start, int) or isinstance(
+                            exception_start, bool
                         ):
                             raise UnsupportedSnapshot(
                                 "Paced exception start time is not integer milliseconds"
@@ -450,15 +443,18 @@ class EditoastOSRDClient:
                     new_exception_ids.add(str(exception_result["id"]))
                 expected_exception_ids[new_schedule_id] = new_exception_ids
 
-            summaries = cast(dict[str, Any], self._request(
-                "POST",
-                "/train_schedules/simulation_summary",
-                {
-                    "infra_id": int(snapshot.infra_id),
-                    "timetable_id": candidate_timetable_id,
-                    "ids": candidate_schedule_ids,
-                },
-            ))
+            summaries = cast(
+                dict[str, Any],
+                self._request(
+                    "POST",
+                    "/train_schedules/simulation_summary",
+                    {
+                        "infra_id": int(snapshot.infra_id),
+                        "timetable_id": candidate_timetable_id,
+                        "ids": candidate_schedule_ids,
+                    },
+                ),
+            )
             statuses: list[str] = []
             for schedule_id in candidate_schedule_ids:
                 schedule_summary_value = summaries.get(str(schedule_id))

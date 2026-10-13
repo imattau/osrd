@@ -67,6 +67,42 @@ every affected, unprotected schedule; larger values make shifting that service
 less desirable. `protected_train_schedule_ids` are excluded from every candidate,
 not merely penalized. The response echoes the objective and each candidate's
 score, and reports both the proposal-pool size and the number actually validated.
+For tighter service-specific retiming rules, `max_shift_seconds_by_schedule`
+sets a hard cap (0–7200 seconds) for individual services; omitted services use
+`max_departure_shift_seconds`. A zero cap prevents that service from being edited.
+Every response also includes a no-change `pass_through_rules_v1` baseline validated
+against the exact same snapshot. The baseline is separate from the edited-candidate
+budget and is not itself an edit recommendation.
+
+Completed plans are recorded with the full typed request and response, snapshot and
+policy, UTC creation time, and SHA-256 digests. Repeating the same request ID and
+payload returns the stored result without rerunning OSRD; reusing that ID with a
+different payload returns HTTP 409. Retrieve a record with
+`GET /v1/operations/plans/{request_id}`. `OSRD_OPS_AUDIT_DB` selects the SQLite
+journal path. Compose mounts a persistent named volume. This append-only adapter is
+for the fork prototype; production should write authoritative audit records through
+Editoast persistence and include the authenticated operator identity.
+
+## Prepare planning outcomes for a learned feasibility ranker
+
+Export completed-plan alternatives and OSRD validation labels from the audit
+journal into a checksum-bound JSONL dataset with scenario-grouped train/test
+assignments:
+
+```sh
+uv run osrd-plan-ranker-data \
+  --audit-db data/plan-audit.sqlite3 \
+  --test-fraction 0.2 \
+  --output-dir data/plan-ranker
+```
+
+Features describe proposed edits, objective, incident size, and pass-through
+baseline validation. The target is strictly whether a candidate passed OSRD
+pathfinding, complete simulation, and zero-conflict checks. This is a
+feasibility-prioritization dataset, not an operator-preference or service-utility
+label. It includes only candidates selected for validation, so it has selection
+bias and cannot support unbiased plan-quality claims. Final OSRD validation
+remains mandatory.
 
 ## Collect a seeded replay dataset
 

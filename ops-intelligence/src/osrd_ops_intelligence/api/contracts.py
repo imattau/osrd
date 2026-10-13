@@ -6,7 +6,7 @@ from math import isfinite
 from typing import Literal
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
 
 
 class StrictModel(BaseModel):
@@ -88,6 +88,9 @@ class PlanningPolicy(StrictModel):
     protected_train_schedule_ids: list[str] = Field(default_factory=list, max_length=500)
     objective: PlanningObjective = PlanningObjective.MINIMIZE_TOTAL_SHIFT
     schedule_priority_weights: dict[str, float] = Field(default_factory=dict, max_length=500)
+    max_shift_seconds_by_schedule: dict[str, StrictInt] = Field(
+        default_factory=dict, max_length=500
+    )
 
     @model_validator(mode="after")
     def objective_weights_are_valid(self) -> "PlanningPolicy":
@@ -96,6 +99,9 @@ class PlanningPolicy(StrictModel):
         for schedule_id, weight in self.schedule_priority_weights.items():
             if not schedule_id or not isfinite(weight) or weight <= 0 or weight > 1000:
                 raise ValueError("schedule priority weights must be finite values in (0, 1000]")
+        for schedule_id, maximum in self.max_shift_seconds_by_schedule.items():
+            if not schedule_id or isinstance(maximum, bool) or not 0 <= maximum <= 7200:
+                raise ValueError("per-schedule shift limits must be integer values in [0, 7200]")
         if self.objective == PlanningObjective.MINIMIZE_WEIGHTED_SHIFT:
             if not self.schedule_priority_weights:
                 raise ValueError("minimize_weighted_shift requires explicit schedule priorities")
@@ -144,6 +150,7 @@ class PlanCandidateValidation(StrictModel):
 
 class PlanCandidateResult(StrictModel):
     candidate_id: str
+    strategy: str
     edits: list[PlanCandidateEdit]
     total_shift_seconds: int
     objective_score: float = Field(ge=0)
@@ -156,5 +163,16 @@ class PlanningResponse(StrictModel):
     objective: PlanningObjective
     generated_candidate_count: int
     evaluated_candidate_count: int
+    baseline: PlanCandidateResult
     candidates: list[PlanCandidateResult]
     rejected_candidates: list[PlanCandidateResult]
+
+
+class PlanAuditRecord(StrictModel):
+    request_id: UUID
+    status: Literal["completed"]
+    created_at: datetime
+    input_sha256: str
+    result_sha256: str
+    request: PlanningRequest
+    result: PlanningResponse

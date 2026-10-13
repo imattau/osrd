@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import asdict
 
 from osrd_ops_intelligence.api.contracts import (
@@ -35,6 +37,7 @@ def _render_candidate(
     return PlanCandidateResult.model_validate(
         {
             "candidate_id": candidate.candidate_id,
+            "strategy": candidate.strategy,
             "edits": [asdict(edit) for edit in candidate.edits],
             "total_shift_seconds": candidate.total_shift_seconds,
             "objective_score": objective_score,
@@ -65,6 +68,25 @@ def _objective_score(
     )
 
 
+def _pass_through_candidate(request: PlanningRequest) -> DepartureShiftCandidate:
+    identity = {
+        "incident_id": request.incident.incident_id,
+        "snapshot": request.snapshot.model_dump(mode="json"),
+        "strategy": "pass_through_rules_v1",
+    }
+    digest = hashlib.sha256(
+        json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()[:16]
+    return DepartureShiftCandidate(
+        candidate_id=f"pass-through-{digest}",
+        incident_id=request.incident.incident_id,
+        snapshot=request.snapshot,
+        strategy="pass_through_rules_v1",
+        edits=(),
+        total_shift_seconds=0,
+    )
+
+
 def _ranking_key(
     candidate: DepartureShiftCandidate,
     score: float,
@@ -86,11 +108,13 @@ async def plan(request: PlanningRequest, client: OSRDClient) -> PlanningResponse
         )
 
     snapshot = SnapshotRef(**request.snapshot.model_dump())
+    baseline_candidate = _pass_through_candidate(request)
     start_times = await client.get_schedule_start_times(snapshot=snapshot)
     affected_ids = set(request.incident.affected_train_schedule_ids)
     protected_ids = set(request.policy.protected_train_schedule_ids)
     weights = request.policy.schedule_priority_weights
-    unknown_policy_ids = (protected_ids | set(weights)) - set(start_times)
+    shift_limits = request.policy.max_shift_seconds_by_schedule
+    unknown_policy_ids = (protected_ids | set(weights) | set(shift_limits)) - set(start_times)
     if unknown_policy_ids:
         raise PlanningInputError(
             f"Policy references schedules outside the bound timetable: {sorted(unknown_policy_ids)}"
@@ -115,6 +139,7 @@ async def plan(request: PlanningRequest, client: OSRDClient) -> PlanningResponse
         delay_seconds=request.incident.delay_seconds,
         max_departure_shift_seconds=request.policy.max_departure_shift_seconds,
         max_candidates=proposal_budget,
+        max_shift_seconds_by_schedule=shift_limits,
     )
     scored = [
         (
@@ -126,6 +151,11 @@ async def plan(request: PlanningRequest, client: OSRDClient) -> PlanningResponse
     scored.sort(key=lambda item: _ranking_key(item[0], item[1]))
     selected = scored[: request.policy.max_candidates]
 
+    baseline_validation = await client.validate_candidate(
+        snapshot=snapshot,
+        candidate_payload=baseline_candidate.to_dict(),
+    )
+    baseline = _render_candidate(baseline_candidate, baseline_validation, 0.0)
     accepted: list[PlanCandidateResult] = []
     rejected: list[PlanCandidateResult] = []
     for candidate, score in selected:
@@ -142,6 +172,7 @@ async def plan(request: PlanningRequest, client: OSRDClient) -> PlanningResponse
         objective=request.policy.objective,
         generated_candidate_count=len(generated),
         evaluated_candidate_count=len(selected),
+        baseline=baseline,
         candidates=accepted,
         rejected_candidates=rejected,
     )

@@ -265,6 +265,12 @@ The follow-on integration slice reads timetable-to-schedule-set relationships fr
 
 Candidate selection now supports explicit operator objectives: minimize total shift, minimize the number of changed services, or minimize priority-weighted shift. Weighted ranking requires a positive priority for each affected unprotected service; protected services remain excluded from candidate generation. The API reports the selected objective, per-candidate score, total proposal count, and validation count so operator policy and validation effort are auditable.
 
+The planner also accepts hard per-service retiming caps through `max_shift_seconds_by_schedule` (0–7200 seconds). These caps are applied while constructing proposals, before objective ranking and OSRD validation; omitted schedules inherit the request-wide `max_departure_shift_seconds`. A zero cap makes a service ineligible for edits without changing its protection status or requiring an objective weight.
+
+Phase 3 now has a validated pass-through baseline: the exact source timetable is copied to an isolated unpublished timetable and receives the same whole-timetable simulation and conflict checks as edited candidates. The completed response and original typed request are stored in an append-only SQLite journal with input/result SHA-256 digests, keyed by request ID; retries with the same ID and payload return the stored result, while a changed payload conflicts. A GET route retrieves the record. This meets the prototype planning-slice audit requirement; production must move authoritative records and authenticated operator identity into Editoast persistence and its authorization boundary.
+
+Phase 4 starts with an offline extraction path from these immutable records into scenario-grouped candidate-feasibility examples. Labels are exactly OSRD validation outcomes; the feature schema does not claim operator utility or acceptance. Since only candidates selected for validation are recorded, the first learned score can prioritize validation only and cannot bypass OSRD or be described as an unbiased plan-quality ranker. Broader candidate exploration and outcome/preference data are prerequisites for a utility ranker.
+
 ## 12. Assumptions, risks, and unresolved decisions
 
 - Public documentation is not a substitute for checking the exact chosen `dev` SHA. Editoast endpoints and DTOs evolve; regenerate API clients and schema bindings from that checkout.

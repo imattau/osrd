@@ -5,6 +5,7 @@ volumes:
   valkey_data:
   rabbitmq_data:
   s3_data:
+  ops_intelligence_data:
 
 
 services:

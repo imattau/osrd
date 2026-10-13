@@ -4,6 +4,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
 WORKDIR /app
+RUN mkdir -p /var/lib/osrd-ops-intelligence && chown 10001:10001 /var/lib/osrd-ops-intelligence
+ENV OSRD_OPS_AUDIT_DB=/var/lib/osrd-ops-intelligence/plans.sqlite3
 COPY pyproject.toml README.md ./
 COPY src ./src
 RUN pip install --no-cache-dir .
