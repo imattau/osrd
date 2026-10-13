@@ -1,4 +1,4 @@
-"""Fit a bounded CPU masked linear forecaster on the pinned RIDE training split."""
+"""Fit and evaluate bounded CPU delay-forecast baselines on the pinned RIDE split."""
 
 # NumPy ships partial stubs; keep strict checks focused on the surrounding contract.
 # pyright: reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false
@@ -12,11 +12,14 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+from osrd_ops_intelligence.models.calibration import calibrate_artifact
+from osrd_ops_intelligence.models.forecast import predict as predict_forecast
 from osrd_ops_intelligence.models.ride_mlp import fit_masked_mlp, predict_mlp
 from osrd_ops_intelligence.training.ride_training_data import FILES
 
-MODEL_SCHEMA = "osrd-ops-ride-delay-forecast/v1"
+MODEL_SCHEMA = "osrd-ops-ride-delay-forecast/v2"
 DATA_SCHEMA = "osrd-ride-training-inputs/v1"
+FORECAST_QUANTILES = (0.1, 0.5, 0.9)
 
 
 def _sha256(path: Path) -> str:
@@ -93,7 +96,7 @@ def train(
     batch_size: int = 1024,
     seed: int = 42,
     learning_rate: float | None = None,
-    l2: float = 0.01,
+    l2: float | None = None,
     model_type: str = "linear",
     hidden_dims: tuple[int, ...] = (256, 128),
 ) -> dict[str, Any]:
@@ -102,30 +105,73 @@ def train(
     effective_learning_rate = (
         learning_rate if learning_rate is not None else (0.001 if model_type == "mlp" else 0.01)
     )
-    if min(max_train_rows, max_validation_rows, epochs, batch_size) <= 0:
-        raise ValueError("Row limits, epochs, and batch size must be positive")
+    effective_l2 = l2 if l2 is not None else (0.0001 if model_type == "mlp" else 0.01)
+    if effective_learning_rate <= 0 or effective_l2 < 0:
+        raise ValueError("learning rate must be positive and L2 penalty cannot be negative")
+    if min(max_train_rows, epochs, batch_size) <= 0 or max_validation_rows < 3:
+        raise ValueError("Training limits must be positive and validation rows must be at least 3")
     features, targets, mask, service_dates, manifest = _load_arrays(dataset_dir)
     cutoff = validation_start.isoformat()
     train_candidates = [i for i, day in enumerate(service_dates) if day < cutoff]
     validation_candidates = [i for i, day in enumerate(service_dates) if day >= cutoff]
     if not train_candidates or not validation_candidates:
         raise ValueError("Chronological split is empty; inspect RIDE service-date coverage")
+    validation_days = sorted({service_dates[index] for index in validation_candidates})
+    if len(validation_days) < 3:
+        raise ValueError("At least 3 validation service dates are required for grouped splits")
+    first_boundary = len(validation_days) // 3
+    second_boundary = (2 * len(validation_days)) // 3
+    date_groups = (
+        set(validation_days[:first_boundary]),
+        set(validation_days[first_boundary:second_boundary]),
+        set(validation_days[second_boundary:]),
+    )
+    if any(not group for group in date_groups):
+        raise ValueError("Could not form early-stop, calibration, and evaluation date groups")
+    candidate_groups = tuple(
+        [index for index in validation_candidates if service_dates[index] in group]
+        for group in date_groups
+    )
+    if any(not group for group in candidate_groups):
+        raise ValueError("A grouped validation partition contains no rows")
 
     rng = np.random.default_rng(seed)
     train_indices = _sample_indices(train_candidates, max_train_rows, rng)
-    validation_indices = _sample_indices(validation_candidates, max_validation_rows, rng)
+    per_partition_limit = max(1, max_validation_rows // 3)
+    early_stop_indices, calibration_indices, evaluation_indices = tuple(
+        _sample_indices(group, per_partition_limit, rng) for group in candidate_groups
+    )
     x_train = np.asarray(features[train_indices], dtype=np.float32)
     y_train = np.asarray(targets[train_indices], dtype=np.float32)
     m_train = np.asarray(mask[train_indices], dtype=bool)
-    x_valid = np.asarray(features[validation_indices], dtype=np.float32)
-    y_valid = np.asarray(targets[validation_indices], dtype=np.float32)
-    m_valid = np.asarray(mask[validation_indices], dtype=bool)
+    x_early = np.asarray(features[early_stop_indices], dtype=np.float32)
+    y_early = np.asarray(targets[early_stop_indices], dtype=np.float32)
+    m_early = np.asarray(mask[early_stop_indices], dtype=bool)
+    x_calibration = np.asarray(features[calibration_indices], dtype=np.float32)
+    y_calibration = np.asarray(targets[calibration_indices], dtype=np.float32)
+    m_calibration = np.asarray(mask[calibration_indices], dtype=bool)
+    x_evaluation = np.asarray(features[evaluation_indices], dtype=np.float32)
+    y_evaluation = np.asarray(targets[evaluation_indices], dtype=np.float32)
+    m_evaluation = np.asarray(mask[evaluation_indices], dtype=bool)
     if not all(
-        np.isfinite(array).all() for array in (x_train, y_train[m_train], x_valid, y_valid[m_valid])
+        np.isfinite(array).all()
+        for array in (
+            x_train,
+            y_train[m_train],
+            x_early,
+            y_early[m_early],
+            x_calibration,
+            y_calibration[m_calibration],
+            x_evaluation,
+            y_evaluation[m_evaluation],
+        )
     ):
         raise ValueError("RIDE arrays contain non-finite values in usable training examples")
-    if not m_train.any(axis=0).all() or not m_valid.any(axis=0).all():
-        raise ValueError("Each of the 15 horizons needs valid train and validation targets")
+    if not all(
+        validity.any(axis=0).all()
+        for validity in (m_train, m_early, m_calibration, m_evaluation)
+    ):
+        raise ValueError("Each horizon needs valid train, early-stop, calibration and eval targets")
 
     # A train-only target mean is a stronger and leakage-safe reference than
     # assuming normalized zero is the mean for every horizon.
@@ -153,7 +199,7 @@ def train(
                 valid_batch = m_train[batch]
                 counts = np.maximum(valid_batch.sum(axis=0), 1).astype(np.float32)
                 errors = (x_batch @ weights + bias - y_train_filled[batch]) * valid_batch
-                gradient_w = (x_batch.T @ errors) / counts + l2 * weights
+                gradient_w = (x_batch.T @ errors) / counts + effective_l2 * weights
                 gradient_b = errors.sum(axis=0) / counts
                 step += 1
                 first_moment_w = beta1 * first_moment_w + (1 - beta1) * gradient_w
@@ -168,11 +214,11 @@ def train(
                 bias -= effective_learning_rate * (first_moment_b / correction1) / (
                     np.sqrt(second_moment_b / correction2) + epsilon
                 )
-        predictions = x_valid @ weights + bias
+        predictions = x_evaluation @ weights + bias
         model_parameters: dict[str, Any] = {"weights": weights.tolist(), "bias": bias.tolist()}
         algorithm = "masked multi-output linear regression with Adam and L2 penalty"
     elif model_type == "mlp":
-        input_mean, input_scale, layer_weights, layer_biases = fit_masked_mlp(
+        input_mean, input_scale, layer_weights, layer_biases, fit_metadata = fit_masked_mlp(
             x_train,
             y_train,
             m_train,
@@ -180,8 +226,12 @@ def train(
             epochs=epochs,
             batch_size=batch_size,
             learning_rate=effective_learning_rate,
-            l2=l2,
+            l2=effective_l2,
             seed=seed,
+            validation_features=x_early,
+            validation_targets=y_early,
+            validation_mask=m_early,
+            quantiles=FORECAST_QUANTILES,
         )
         model_parameters = {
             "input_mean": input_mean.tolist(),
@@ -190,18 +240,81 @@ def train(
             "biases": [layer.tolist() for layer in layer_biases],
             "hidden_dims": list(hidden_dims),
             "activation": "relu",
-            "loss": "horizon-wise masked mean squared error",
+            "loss": "horizon-wise masked pinball loss",
+            "quantiles": list(FORECAST_QUANTILES),
+            "fit_metadata": fit_metadata,
         }
-        predictions = predict_mlp(x_valid, model_parameters)
-        algorithm = "masked feed-forward MLP with Adam and L2 penalty"
+        algorithm = "masked p10/p50/p90 feed-forward quantile MLP with Adam and L2 penalty"
     else:
         raise ValueError("model_type must be 'linear' or 'mlp'")
+
+    model: dict[str, Any] = {
+        "schema": MODEL_SCHEMA,
+        "dataset": manifest["dataset"],
+        "dataset_revision": manifest["revision"],
+        "dataset_manifest_sha256": _sha256(dataset_dir / "manifest.json"),
+        "source_training_files": manifest["files"],
+        "target": "RIDE provider-normalized delay at the next 15 events",
+        "model_type": model_type,
+        "feature_schema_sha256": FILES["tabular/scheme.yaml"],
+        "normalization_sha256": FILES["tabular/normalization.yaml"],
+        "algorithm": algorithm,
+        "training_config": {
+            "validation_start_service_date": cutoff,
+            "epochs_requested": epochs,
+            "batch_size": batch_size,
+            "seed": seed,
+            "learning_rate": effective_learning_rate,
+            "l2_penalty": effective_l2,
+            "max_train_rows": max_train_rows,
+            "max_validation_rows_total": max_validation_rows,
+            "sample_index_sha256": {
+                name: hashlib.sha256(np.asarray(indices, dtype="<i8").tobytes()).hexdigest()
+                for name, indices in (
+                    ("train", train_indices),
+                    ("early_stop", early_stop_indices),
+                    ("calibration", calibration_indices),
+                    ("evaluation", evaluation_indices),
+                )
+            },
+        },
+        **model_parameters,
+        "safety": {
+            "use": "offline delay forecast research and candidate prioritization only",
+            "not_a_plan_feasibility_certificate": True,
+            "osrd_validation_required_for_plans": True,
+        },
+    }
+    model["model_sha256"] = hashlib.sha256(
+        json.dumps(model, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    quantile_crossing: Any = None
+    quantile_predictions: Any = None
+    if model_type == "mlp":
+        calibration_predictions = predict_mlp(x_calibration, model)
+        model = calibrate_artifact(
+            model,
+            calibration_predictions,
+            y_calibration,
+            m_calibration,
+            coverage=0.8,
+        )
+        raw_quantile_predictions = predict_mlp(
+            x_evaluation, model, sort_quantiles=False
+        )
+        quantile_crossing = (
+            (raw_quantile_predictions[:, :, 0] > raw_quantile_predictions[:, :, 1])
+            | (raw_quantile_predictions[:, :, 1] > raw_quantile_predictions[:, :, 2])
+        )
+        quantile_predictions = predict_forecast(x_evaluation, model)
+        predictions = quantile_predictions[:, :, 1]
+
     per_horizon: list[dict[str, float | int]] = []
-    for horizon in range(y_valid.shape[1]):
-        valid = m_valid[:, horizon]
-        errors = predictions[valid, horizon] - y_valid[valid, horizon]
-        baseline_errors = target_means[horizon] - y_valid[valid, horizon]
-        zero_errors = -y_valid[valid, horizon]
+    for horizon in range(y_evaluation.shape[1]):
+        valid = m_evaluation[:, horizon]
+        errors = predictions[valid, horizon] - y_evaluation[valid, horizon]
+        baseline_errors = target_means[horizon] - y_evaluation[valid, horizon]
+        zero_errors = -y_evaluation[valid, horizon]
         model_mae = float(np.mean(np.abs(errors)))
         baseline_mae = float(np.mean(np.abs(baseline_errors)))
         per_horizon.append(
@@ -224,20 +337,18 @@ def train(
             }
         )
 
-    validation_months = sorted(
-        {service_dates[index][:7] for index in validation_indices}
-    )
+    evaluation_months = sorted({service_dates[index][:7] for index in evaluation_indices})
     by_service_month: list[dict[str, Any]] = []
-    for month in validation_months:
+    for month in evaluation_months:
         month_rows = np.asarray(
-            [service_dates[index][:7] == month for index in validation_indices], dtype=bool
+            [service_dates[index][:7] == month for index in evaluation_indices], dtype=bool
         )
         month_horizons: list[dict[str, float | int]] = []
-        for horizon in range(y_valid.shape[1]):
-            valid = m_valid[:, horizon] & month_rows
+        for horizon in range(y_evaluation.shape[1]):
+            valid = m_evaluation[:, horizon] & month_rows
             if not valid.any():
                 continue
-            errors = predictions[valid, horizon] - y_valid[valid, horizon]
+            errors = predictions[valid, horizon] - y_evaluation[valid, horizon]
             month_horizons.append(
                 {
                     "horizon": horizon + 1,
@@ -249,25 +360,37 @@ def train(
             )
         by_service_month.append({"service_month": month, "by_horizon": month_horizons})
 
-    model: dict[str, Any] = {
-        "schema": MODEL_SCHEMA,
-        "dataset": manifest["dataset"],
-        "dataset_revision": manifest["revision"],
-        "dataset_manifest_sha256": _sha256(dataset_dir / "manifest.json"),
-        "source_training_files": manifest["files"],
-        "target": "RIDE provider-normalized delay at the next 15 events",
-        "feature_schema_sha256": FILES["tabular/scheme.yaml"],
-        "normalization_sha256": FILES["tabular/normalization.yaml"],
-        "algorithm": algorithm,
-        **model_parameters,
-        "safety": {
-            "use": "offline delay forecast research and candidate prioritization only",
-            "not_a_plan_feasibility_certificate": True,
-            "osrd_validation_required_for_plans": True,
-        },
-    }
-    model_bytes = json.dumps(model, sort_keys=True, separators=(",", ":")).encode()
-    model["model_sha256"] = hashlib.sha256(model_bytes).hexdigest()
+    quantile_report: list[dict[str, Any]] = []
+    if model_type == "mlp":
+        for horizon in range(y_evaluation.shape[1]):
+            valid = m_evaluation[:, horizon]
+            actual = y_evaluation[valid, horizon]
+            quantile_values = quantile_predictions[valid, horizon, :]
+            residuals = actual[:, None] - quantile_values
+            levels = np.asarray(FORECAST_QUANTILES, dtype=np.float32)
+            pinball = np.maximum(levels * residuals, (levels - 1) * residuals).mean(axis=0)
+            quantile_report.append(
+                {
+                    "horizon": horizon + 1,
+                    "valid_count": int(valid.sum()),
+                    "quantile_levels": list(FORECAST_QUANTILES),
+                    "pinball_loss_normalized": [float(value) for value in pinball],
+                    "calibrated_p10_p90_coverage": float(
+                        np.mean(
+                            (actual >= quantile_values[:, 0])
+                            & (actual <= quantile_values[:, 2])
+                        )
+                    ),
+                    "nominal_p10_p90_coverage": 0.8,
+                    "quantile_crossing_rate_before_rearrangement": float(
+                        quantile_crossing[valid].mean()
+                    ),
+                    "mean_p10_p90_width_normalized": float(
+                        np.mean(quantile_values[:, 2] - quantile_values[:, 0])
+                    ),
+                }
+            )
+
     report: dict[str, Any] = {
         "schema": "osrd-ops-ride-delay-evaluation/v1",
         "model_sha256": model["model_sha256"],
@@ -277,29 +400,54 @@ def train(
             min(service_dates[i] for i in train_indices),
             max(service_dates[i] for i in train_indices),
         ],
-        "validation_service_date_range": [
-            min(service_dates[i] for i in validation_indices),
-            max(service_dates[i] for i in validation_indices),
+        "early_stop_service_date_range": [
+            min(service_dates[i] for i in early_stop_indices),
+            max(service_dates[i] for i in early_stop_indices),
+        ],
+        "calibration_service_date_range": [
+            min(service_dates[i] for i in calibration_indices),
+            max(service_dates[i] for i in calibration_indices),
+        ],
+        "evaluation_service_date_range": [
+            min(service_dates[i] for i in evaluation_indices),
+            max(service_dates[i] for i in evaluation_indices),
         ],
         "train_sample_rows": len(train_indices),
-        "validation_sample_rows": len(validation_indices),
+        "early_stop_sample_rows": len(early_stop_indices),
+        "calibration_sample_rows": len(calibration_indices),
+        "evaluation_sample_rows": len(evaluation_indices),
         "training_rows_available_before_sampling": len(train_candidates),
-        "validation_rows_available_before_sampling": len(validation_candidates),
-        "epochs": epochs,
+        "validation_rows_available_before_sampling": {
+            name: len(group)
+            for name, group in zip(
+                ("early_stop", "calibration", "evaluation"), candidate_groups, strict=True
+            )
+        },
+        "epochs_requested": epochs,
+        "epochs_run": (
+            model_parameters.get("fit_metadata", {}).get("epochs_run", epochs)
+        ),
         "learning_rate": effective_learning_rate,
+        "l2_penalty": effective_l2,
         "model_type": model_type,
         "hidden_dims": list(hidden_dims) if model_type == "mlp" else [],
         "seed": seed,
         "metrics": per_horizon,
+        "quantile_metrics": quantile_report,
+        "interval_calibration": model.get("interval_calibration"),
+        "quantile_crossing_rate_before_rearrangement": (
+            float(quantile_crossing[m_evaluation].mean()) if model_type == "mlp" else None
+        ),
         "metric_space": (
             "provider-normalized target values; apply pinned normalization to convert to seconds"
         ),
-        "validation_by_service_month": by_service_month,
+        "evaluation_by_service_month": by_service_month,
         "test_period_used": False,
         "limitations": [
             "This is an observed-delay forecaster, not an OSRD candidate feasibility model.",
             "A bounded deterministic sample is used; rerun with larger limits before conclusions.",
             "The official 2025 holdout was not used for fitting or tuning.",
+            "Internal early-stop, calibration, and evaluation partitions are date-grouped and sampled separately.",
         ],
     }
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -325,6 +473,7 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=1024)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--learning-rate", type=float)
+    parser.add_argument("--l2", type=float)
     parser.add_argument("--model", choices=("linear", "mlp"), default="linear")
     parser.add_argument("--hidden-dimensions", type=int, nargs="+", default=[256, 128])
     args = parser.parse_args()
@@ -345,6 +494,7 @@ def main() -> None:
             batch_size=args.batch_size,
             seed=args.seed,
             learning_rate=args.learning_rate,
+            l2=args.l2,
             model_type=args.model,
             hidden_dims=tuple(args.hidden_dimensions),
         )

@@ -16,7 +16,7 @@ src/osrd_ops_intelligence/
   api/         internal request/response contracts (pydantic)
   service/     FastAPI app and OSRD client boundary
   features/    versioned feature transforms (placeholder)
-  models/      baselines and graph-temporal model (placeholder)
+  models/      linear and quantile-MLP baselines; graph model planned
   optimizer/   candidate generation, objectives (placeholder)
   training/    replay collector; labels, splits, training (later)
   registry/    model manifests, promotion metadata (placeholder)
@@ -127,16 +127,17 @@ uv run osrd-ride-train --output-dir data/rail/ride-forecast-model
 ```
 
 The trainer verifies every pinned input, memory-maps the 5.7 GB feature matrix, samples
-up to 20,000 training and 5,000 validation rows, and groups its chronological split by
-service date (default cutoff 2024-10-01). It optimizes only valid targets and does not
-load or score the 2025 holdout. Its report compares each horizon with a target mean
-computed only from training rows, includes signed bias, and breaks validation metrics
-out by service month to expose temporal variation. Metrics are in provider-normalized
-target units; see the readiness plan for interpretation and limitations.
+up to 20,000 fit rows and 5,000 later rows grouped by service date. Dates after the
+default 2024-10-01 cutoff are split chronologically into early-stop, calibration, and
+internal-evaluation groups. It optimizes only valid targets and does not load or score
+the 2025 holdout. Its report compares each horizon with a train-only mean, includes
+signed bias, and breaks evaluation metrics out by service month. Metrics are in
+provider-normalized target units; see the readiness plan for interpretation and limits.
 
 The trainer can also fit the first neural baseline, a small feed-forward MLP over the
 same RIDE tabular features. It uses train-only feature standardization, two ReLU hidden
-layers by default, Adam, L2 regularization, and a validity-masked multi-horizon loss:
+layers by default, Adam, L2 regularization, a validity-masked multi-horizon quantile
+loss, and p10/p50/p90 outputs:
 
 ```sh
 uv run osrd-ride-train --model mlp \
@@ -148,6 +149,91 @@ Use the same split, seed, and row limits for the linear comparison. This MLP doe
 consume railway topology or event sequences, so it is not the graph-temporal model
 specified in the architecture design. Keep it an offline experiment until it beats the
 linear and persistence references on a frozen holdout and receives review.
+The MLP retains its best early-stop-group masked-pinball-loss checkpoint and stops
+after five epochs without improvement. It expands p10–p90 intervals using the separate
+calibration group; the final internal evaluation and reserved 2025 holdout stay out of
+both fitting and calibration.
+Split-conformal coverage is marginal and relies on calibration/evaluation exchangeability;
+railway time drift can break that assumption, so monitor coverage by time and corridor.
+
+RIDE Gold Lite also publishes a PyTorch Geometric heterogeneous GNN representation.
+The schemas and checksums we retrieved are recorded in
+[`data_contracts/ride/gold-lite-gnn-manifest.json`](data_contracts/ride/gold-lite-gnn-manifest.json),
+and the graph/data design and acquisition constraints are in the readiness document.
+The GNN shards are not downloaded by the tabular fetch command. From the upstream RIDE
+repository root, `python -m scripts.dataset.download.download_dataset --target
+gold_lite_gnn` is the official route, but fetches the whole GNN component including its
+test shard. For controlled training, selectively fetch only `gnn/feature_spec.yaml`,
+`gnn/normalization.yaml`, and `gnn/train/*.pt` from revision
+`e5c1ed1126bca1784eb6ea93816dd6cc89afa544`, then verify the manifest hashes before
+loading. The first graph model should be an optional offline PyTorch/PyG path that
+predicts the same 15 delay horizons and masks as the tabular models, with date-grouped
+splits and shared event-level scoring. Do not use the test shard until model selection
+is frozen. The published RIDE graph represents train/station/event interactions; it is
+not an OSRD track/switch/signal graph and cannot replace OSRD validation of a timetable.
+
+To run a saved linear or MLP artifact on a compatible feature matrix, use the offline
+predictor. It verifies the model digest and exact RIDE feature/normalization schemas.
+The linear model writes a 2D array; the MLP writes `[rows, 15 horizons, 3 quantiles]`
+in provider-normalized target units (p10, p50, p90). Inference sorts crossed quantile
+outputs into nondecreasing order; the training report records the pre-sort crossing
+rate, pinball losses, and p10–p90 interval coverage by horizon:
+
+```sh
+uv run osrd-ride-predict \
+  --model data/rail/ride-forecast-mlp/model.json \
+  --features data/rail/ride-gold-lite-training/tabular/train/x.npy \
+  --feature-schema data/rail/ride-gold-lite-training/tabular/scheme.yaml \
+  --normalization data/rail/ride-gold-lite-training/tabular/normalization.yaml \
+  --output data/rail/ride-predictions.npy
+```
+
+This utility is for offline experimentation and does not connect the forecast to the
+planning API or authorize operational changes.
+
+While the RIDE download is pending, generate a tiny synthetic fixture and fit a smoke
+MLP with separate training, early-stopping, calibration, and test partitions:
+
+```sh
+uv run osrd-ride-synthetic-smoke
+```
+
+By default this writes under `data/rail/ride-synthetic-smoke/`: partitioned features,
+targets and masks, toy schema/normalization files, uncalibrated and calibrated model
+artifacts, predictions, and a report. The calibrator uses split-conformal expansion
+from a separate calibration partition; the report evaluates coverage on the separate
+synthetic test partition. You can exercise the calibrated predictor with:
+
+```sh
+uv run osrd-ride-predict \
+  --model data/rail/ride-synthetic-smoke/model.json \
+  --features data/rail/ride-synthetic-smoke/features-test.npy \
+  --feature-schema data/rail/ride-synthetic-smoke/feature-schema.yaml \
+  --normalization data/rail/ride-synthetic-smoke/normalization.yaml \
+  --output data/rail/ride-synthetic-smoke/predictions.npy
+```
+
+These generated variables are not railway observations or RIDE features. The report
+only indicates that the training and inference path ran; do not use its metrics to
+assess forecast quality or generalization.
+
+For real experiments, calibrate only with a partition that was not used for model
+fitting, checkpoint selection, or final evaluation. Generate that partition's model
+predictions first, then run `osrd-ride-calibrate` with those predictions, targets and
+validity mask. The resulting artifact records per-horizon interval expansions and a
+hash of the calibration labels; evaluate it on a different untouched split.
+
+The synthetic fixture shows the command shape:
+
+```sh
+uv run osrd-ride-calibrate \
+  --model data/rail/ride-synthetic-smoke/model-uncalibrated.json \
+  --predictions data/rail/ride-synthetic-smoke/predictions-calibration.npy \
+  --targets data/rail/ride-synthetic-smoke/targets-calibration.npy \
+  --mask data/rail/ride-synthetic-smoke/mask-calibration.npy \
+  --coverage 0.8 \
+  --output data/rail/ride-synthetic-smoke/model-calibrated-cli.json
+```
 
 ## Prepare planning outcomes for a learned feasibility ranker
 

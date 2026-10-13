@@ -91,6 +91,27 @@ Build an **operations graph-temporal model** over OSRD’s graph rather than a l
 
 **Baseline comparisons:** gradient-boosted trees over engineered event/resource features; persistence/linear delay propagation; OSRD-only rule baseline. A GNN is retained only if it demonstrates robust gains over these simpler baselines on held-out corridors/time periods.
 
+**First graph prototype:** use the published RIDE Gold Lite `gnn/` representation and
+its official builder/trainer before creating a new graph encoding. It is a PyTorch
+Geometric heterogeneous graph with train-node, station-node, station-link, past-event,
+and known-future-event feature groups. It supplies disjoint train and 2025 test graph
+shards, feature specification and normalization metadata, and a shared 15-event delay
+target protocol. Gold Lite is a development-sized dataset (the full release tree is
+listed as 26.5 GB); only the exact GNN metadata and train graph shards should be fetched
+for initial development. Preserve its split and target alignment; run all internal
+model selection within the published training period, then evaluate the official 2025
+test once. The RIDE repository reports Gold Standard mean MAE of 73.62 s for GNN versus
+77.20 s for MLP over ten seeds. That supports running the comparison, but is not an
+OSRD-fork result and does not establish transfer to another railway or planning task.
+
+This public GNN is event/station relational, not an OSRD infrastructure graph. Its
+features do not encode RailJSON track sections, switch route choices, signaling blocks,
+or validated resource occupancy. Follow it with a separate OSRD adapter: create directed
+track/resource edges from a pinned infrastructure version, connect train events to
+occupancy intervals and operational points, and retain typed ID mappings with provenance
+and match confidence. Keep both models as delay forecasters; OSRD pathfinding,
+simulation and conflict detection remain the feasibility authority.
+
 ### 4.2 Candidate generation and optimization
 
 Use a two-stage constrained optimizer:

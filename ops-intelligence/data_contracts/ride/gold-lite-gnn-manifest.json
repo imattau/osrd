@@ -1,0 +1,31 @@
+{
+  "dataset": "orailix/ride-gold-lite",
+  "dataset_license": "CC-BY-4.0",
+  "dataset_revision": "e5c1ed1126bca1784eb6ea93816dd6cc89afa544",
+  "representation": "gnn",
+  "manifest_source": "https://huggingface.co/datasets/orailix/ride-gold-lite/blob/main/ride_gold_lite_croissant.json",
+  "manifest_note": "Digests were transcribed from the published Croissant manifest; the files are listed at the pinned dataset revision. Verify SHA-256 after download. Do not infer file size or granularity from these entries.",
+  "attribution": "RIDE (OrAilix), based on data from Infrabel and Open-Meteo",
+  "files": {
+    "gnn/feature_spec.yaml": {
+      "sha256": "28f636af3bf5ebac9df7190648b57d42bea795558a4842985e5f95fda9f8f9e3",
+      "role": "node and relation feature-column specification"
+    },
+    "gnn/normalization.yaml": {
+      "sha256": "8ebc3a30585ab2f4dd0f83eb0505375cf8d8aaf7d52694bd2f7bbaecc756fcfb",
+      "role": "published feature and target normalization"
+    },
+    "gnn/train/graphs_part_00000.pt": {
+      "sha256": "df9fef3fc0c72a47e6fea534afd51e2c959864a53de737f43f1d08e25a81a0ef",
+      "role": "training split PyTorch Geometric heterogeneous graph shard"
+    },
+    "gnn/train/graphs_part_00001.pt": {
+      "sha256": "930cb01e2c0bc9b6da568b9f75b72791487992520976413aa4392459dbd9f1bc",
+      "role": "training split PyTorch Geometric heterogeneous graph shard"
+    },
+    "gnn/test/graphs_part_00000.pt": {
+      "sha256": "084b9f070c0d68814be9be8ac37c62646b6eb834f8379b23d3d4e0cb21396b9c",
+      "role": "held-out test split PyTorch Geometric heterogeneous graph shard; do not fetch until model selection is frozen"
+    }
+  }
+}
