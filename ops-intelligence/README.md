@@ -110,14 +110,16 @@ uv run osrd-ride-fetch-training
 ```
 
 The downloader uses Hugging Face's Xet-aware client for adaptive parallel transfer,
-terminal progress reporting, and resumable Xet cache state. If Xet reports a known CAS
-response-decoding/reconstruction failure, it falls back to a resumable HTTPS range
-transfer with bounded retries. A Hugging Face token is not required for this public
-dataset, but is recommended for a multi-gigabyte fetch: the Hub warns that anonymous
-requests have lower limits and may be slower. A configured `HF_TOKEN` or saved login
-is used automatically. SHA-256 hashes are verified before data is accepted. Any `.part`
-file left by the older single-stream downloader is not reused by Xet and is removed
-only after the replacement verifies successfully.
+terminal progress reporting, and resumable Xet cache state. If Xet reports a CAS
+response-decoding/reconstruction failure, it retries with Hugging Face's supported
+non-Xet HTTP path in a fresh process; if that fails, it tries a resumable HTTPS range
+transfer with bounded retries. Pressing Ctrl+C stops the active transfer process and
+retains resumable cache state; already verified files remain in place. A Hugging Face
+token is not required for this public dataset, but is recommended for a multi-gigabyte
+fetch: the Hub warns that anonymous requests have lower limits and may be slower. A
+configured `HF_TOKEN` or saved login is used automatically. SHA-256 hashes are verified
+before data is accepted. Any `.part` file left by the older single-stream downloader
+is not reused by Xet and is removed only after the replacement verifies successfully.
 
 To fit the bounded CPU baseline after acquisition, install the numeric extra and run:
 

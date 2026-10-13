@@ -9,8 +9,11 @@ import hashlib
 import http.client
 import json
 import os
+import signal
 import socket
 import ssl
+import subprocess
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -39,6 +42,58 @@ def _hash_file(path: Path) -> str:
         while chunk := source.read(1024 * 1024):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _download_with_hub(output_dir: Path, relative_path: str, *, disable_xet: bool = False) -> Path:
+    """Run the Hub transfer in a process group that can be stopped on Ctrl+C."""
+    env = os.environ.copy()
+    if disable_xet:
+        env["HF_HUB_DISABLE_XET"] = "1"
+    script = (
+        "import sys; from huggingface_hub import hf_hub_download; "
+        "hf_hub_download(repo_id=sys.argv[1], filename=sys.argv[2], "
+        "repo_type='dataset', revision=sys.argv[3], local_dir=sys.argv[4], "
+        "token=None, user_agent='osrd-ops-intelligence/0.1')"
+    )
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            script,
+            DATASET,
+            relative_path,
+            REVISION,
+            str(output_dir),
+        ],
+        env=env,
+        start_new_session=(os.name != "nt"),
+    )
+    try:
+        return_code = process.wait()
+    except KeyboardInterrupt:
+        print("Stopping transfer; keeping Hugging Face's resumable cache…", flush=True)
+        if os.name == "nt":
+            process.terminate()
+        else:
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+        try:
+            process.wait(timeout=5)
+        except (subprocess.TimeoutExpired, KeyboardInterrupt):
+            if os.name == "nt":
+                process.kill()
+            else:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            process.wait()
+        raise
+    if return_code:
+        raise subprocess.CalledProcessError(return_code, process.args)
+    return output_dir / relative_path
 
 
 def _download_http_fallback(
@@ -153,8 +208,7 @@ def _download_http_fallback(
                 ) from error
             delay = min(2**attempt, 60)
             print(
-                f"Transfer interrupted ({error}); resuming in {delay}s "
-                f"(attempt {attempt + 1}/6)",
+                f"Transfer interrupted ({error}); resuming in {delay}s (attempt {attempt + 1}/6)",
                 flush=True,
             )
             time.sleep(delay)
@@ -186,7 +240,7 @@ def _download_http_fallback(
             )
         delay = min(2**attempt, 60)
         print(
-            f"Checksum mismatch; restarting transfer in {delay}s " f"(attempt {attempt + 1}/6)",
+            f"Checksum mismatch; restarting transfer in {delay}s (attempt {attempt + 1}/6)",
             flush=True,
         )
         time.sleep(delay)
@@ -196,53 +250,42 @@ def _download_http_fallback(
 
 def _download_file(output_dir: Path, relative_path: str, expected_sha256: str) -> int:
     try:
-        from huggingface_hub import get_token, hf_hub_download
+        from huggingface_hub import get_token
     except ImportError as error:
         raise RuntimeError(
             "Install the Hugging Face download extra with `uv sync --extra rail-data`."
         ) from error
 
-    # hf_hub_download uses hf_xet for this Xet-backed repository, providing
-    # adaptive parallel range transfers, a terminal progress bar, and resumable
-    # cache state. token=None uses a saved HF_TOKEN/login when present, otherwise
-    # the public dataset is fetched anonymously.
+    # Use a child process so Ctrl+C can stop native hf_xet work promptly.
     try:
-        downloaded = Path(
-            hf_hub_download(
-                repo_id=DATASET,
-                filename=relative_path,
-                repo_type="dataset",
-                revision=REVISION,
-                local_dir=output_dir,
-                token=None,
-                user_agent="osrd-ops-intelligence/0.1",
-            )
-        )
+        downloaded = _download_with_hub(output_dir, relative_path)
     except Exception as error:
-        message = str(error).lower()
-        xet_reconstruction_failure = any(
-            marker in message
-            for marker in (
-                "file reconstruction error",
-                "cas client error",
-                "error decoding response body",
-            )
-        )
-        if not xet_reconstruction_failure:
-            raise
         print(
-            f"Xet reconstruction failed for {relative_path}; "
-            "falling back to resumable HTTPS range download.",
+            f"Hub/Xet transfer failed for {relative_path} ({error}); "
+            "retrying with the Hugging Face Hub's non-Xet downloader.",
             flush=True,
         )
         try:
-            return _download_http_fallback(
-                output_dir / relative_path, relative_path, expected_sha256, get_token()
-            )
+            downloaded = _download_with_hub(output_dir, relative_path, disable_xet=True)
+            actual = _hash_file(downloaded)
+            if actual == expected_sha256:
+                return downloaded.stat().st_size
+            downloaded.unlink(missing_ok=True)
+            raise ValueError(f"Integrity check failed after non-Xet retry: sha256={actual}")
         except Exception as fallback_error:
-            raise RuntimeError(
-                f"Xet download failed ({error}); HTTPS fallback also failed ({fallback_error})"
-            ) from fallback_error
+            print(
+                f"Non-Xet retry failed ({fallback_error}); trying resumable HTTPS ranges.",
+                flush=True,
+            )
+            try:
+                return _download_http_fallback(
+                    output_dir / relative_path, relative_path, expected_sha256, get_token()
+                )
+            except Exception as http_error:
+                raise RuntimeError(
+                    f"Xet download failed ({error}); non-Xet retry failed "
+                    f"({fallback_error}); HTTPS range fallback failed ({http_error})"
+                ) from http_error
 
     actual = _hash_file(downloaded)
     if actual != expected_sha256:
@@ -307,6 +350,9 @@ def main() -> None:
     args = parser.parse_args()
     try:
         manifest = fetch(args.output_dir)
+    except KeyboardInterrupt:
+        print("Download cancelled; verified files and resumable cache were kept.", file=sys.stderr)
+        raise SystemExit(130) from None
     except Exception as error:
         parser.error(str(error))
     print(json.dumps(manifest, indent=2, sort_keys=True))
