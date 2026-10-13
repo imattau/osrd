@@ -29,6 +29,7 @@ osrd-replay-train = "osrd_ops_intelligence.training.train_replay:main"
 osrd-ride-fetch-core = "osrd_ops_intelligence.training.ride_core:main"
 osrd-ride-baseline = "osrd_ops_intelligence.training.ride_baseline:main"
 osrd-plan-ranker-data = "osrd_ops_intelligence.training.plan_ranker_data:main"
+osrd-plan-ranker-train = "osrd_ops_intelligence.training.train_plan_ranker:main"
 
 [build-system]
 requires = ["hatchling>=1.26,<2"]

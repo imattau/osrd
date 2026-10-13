@@ -12,6 +12,21 @@ from typing import Any, cast
 
 FEATURE_SCHEMA = "osrd-ops-plan-candidate-features/v1"
 DATASET_SCHEMA = "osrd-ops-plan-candidate-dataset/v1"
+FEATURE_NAMES = (
+    "edit_count",
+    "total_shift_seconds",
+    "mean_shift_seconds",
+    "max_shift_seconds",
+    "objective_score",
+    "incident_delay_seconds",
+    "max_departure_shift_seconds",
+    "policy_max_candidates",
+    "baseline_valid",
+    "baseline_conflict_count",
+    "objective_minimize_total_shift",
+    "objective_minimize_changed_services",
+    "objective_minimize_weighted_shift",
+)
 
 
 def _canonical_json(value: Any) -> str:
@@ -148,6 +163,7 @@ def export_dataset(audit_db: Path, output_dir: Path, test_fraction: float = 0.2)
     manifest = {
         "schema": DATASET_SCHEMA,
         "feature_schema": FEATURE_SCHEMA,
+        "feature_names": list(FEATURE_NAMES),
         "dataset_file": dataset_path.name,
         "dataset_sha256": _digest(content),
         "source_record_count": len(records),

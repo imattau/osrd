@@ -104,6 +104,20 @@ label. It includes only candidates selected for validation, so it has selection
 bias and cannot support unbiased plan-quality claims. Final OSRD validation
 remains mandatory.
 
+Train the first feasibility-prioritization model and evaluate it on held-out
+scenario groups:
+
+```sh
+uv run osrd-plan-ranker-train data/plan-ranker \
+  --output-dir data/plan-ranker-model
+```
+
+The report compares mean per-scenario OSRD-valid rates in the top 1, 3, and 5
+validation slots against ordering by the existing objective score, and includes
+an oracle upper bound. Training requires both valid and invalid examples in the
+training split. The artifact is an offline experiment; it is not loaded by the
+planning API.
+
 ## Collect a seeded replay dataset
 
 Start the OSRD stack and import an infrastructure and rolling stock first. The

@@ -271,6 +271,8 @@ Phase 3 now has a validated pass-through baseline: the exact source timetable is
 
 Phase 4 starts with an offline extraction path from these immutable records into scenario-grouped candidate-feasibility examples. Labels are exactly OSRD validation outcomes; the feature schema does not claim operator utility or acceptance. Since only candidates selected for validation are recorded, the first learned score can prioritize validation only and cannot bypass OSRD or be described as an unbiased plan-quality ranker. Broader candidate exploration and outcome/preference data are prerequisites for a utility ranker.
 
+The first feasibility model is a regularized logistic classifier over that fixed candidate feature schema. Its offline report compares scenario-macro top-1/top-3/top-5 validation yield against the current objective-score order and reports an oracle bound. Promotion and online planner integration are deliberately separate; this model is not loaded by the service, and it cannot certify candidate feasibility.
+
 ## 12. Assumptions, risks, and unresolved decisions
 
 - Public documentation is not a substitute for checking the exact chosen `dev` SHA. Editoast endpoints and DTOs evolve; regenerate API clients and schema bindings from that checkout.
