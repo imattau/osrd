@@ -18,10 +18,7 @@ from typing import BinaryIO
 DATASET = "orailix/ride-gold-lite"
 REVISION = "e5c1ed1126bca1784eb6ea93816dd6cc89afa544"
 RELATIVE_PATH = "core/test_eval_table.parquet"
-URL = (
-    f"https://huggingface.co/datasets/{DATASET}/resolve/{REVISION}/"
-    f"{RELATIVE_PATH}?download=true"
-)
+URL = f"https://huggingface.co/datasets/{DATASET}/resolve/{REVISION}/{RELATIVE_PATH}?download=true"
 EXPECTED_BYTES = 74_008_518
 EXPECTED_SHA256 = "6bd73df24dc459d1d8449995a120601aa9a640b71a8bf1dd5d537d20de9cfaf4"
 ATTRIBUTION = "RIDE (OrAilix), based on data from Infrabel and Open-Meteo"
@@ -48,9 +45,7 @@ def _download(stream: BinaryIO, destination: Path) -> None:
             digest.update(chunk)
             output.write(chunk)
     if size != EXPECTED_BYTES or digest.hexdigest() != EXPECTED_SHA256:
-        raise ValueError(
-            f"Integrity check failed (bytes={size}, sha256={digest.hexdigest()})"
-        )
+        raise ValueError(f"Integrity check failed (bytes={size}, sha256={digest.hexdigest()})")
 
 
 def fetch(output_dir: Path) -> Path:

@@ -45,9 +45,7 @@ def evaluate(table_path: Path) -> dict[str, Any]:
     horizon = 15
     columns = ["last_known_delay", *(f"future_delay_{step}" for step in range(1, horizon + 1))]
     table = pq.read_table(table_path, columns=columns)
-    last_delay = pc.fill_null(table["last_known_delay"], math.nan).to_numpy(
-        zero_copy_only=False
-    )
+    last_delay = pc.fill_null(table["last_known_delay"], math.nan).to_numpy(zero_copy_only=False)
     by_horizon: list[dict[str, float | int]] = []
     all_absolute_errors: list[Any] = []
     all_squared_errors: list[Any] = []

@@ -114,9 +114,7 @@ def test_candidate_validation_copies_linked_schedules_and_cleans_up() -> None:
                     response[str(schedule_id)] = {
                         "train_schedule": {"status": "success"},
                         "exceptions": (
-                            {"9100": {"status": "success"}}
-                            if schedule_id == 9002
-                            else {}
+                            {"9100": {"status": "success"}} if schedule_id == 9002 else {}
                         ),
                     }
                 return self._respond(response)
@@ -282,4 +280,3 @@ def test_candidate_validation_cleans_up_after_partial_creation_failure() -> None
 
     assert ("DELETE", "/timetable/900") in calls
     assert ("DELETE", "/train_schedule_sets/901") in calls
-

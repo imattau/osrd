@@ -37,13 +37,19 @@ def generate(output_dir: Path, *, rows: int = 1024, seed: int = 73) -> dict[str,
     train_end = int(rows * 0.60)
     validation_end = int(rows * 0.75)
     calibration_end = int(rows * 0.875)
-    if min(train_end, validation_end - train_end, calibration_end - validation_end, rows - calibration_end) < 8:
+    if (
+        min(
+            train_end,
+            validation_end - train_end,
+            calibration_end - validation_end,
+            rows - calibration_end,
+        )
+        < 8
+    ):
         raise ValueError("Each synthetic data split must contain at least eight rows")
 
     base_signal = 0.65 * features[:, 0] - 0.35 * features[:, 1]
-    nonlinear_signal = 0.4 * features[:, 2] * features[:, 3] + 0.2 * np.maximum(
-        features[:, 4], 0
-    )
+    nonlinear_signal = 0.4 * features[:, 2] * features[:, 3] + 0.2 * np.maximum(features[:, 4], 0)
     targets = np.empty((rows, HORIZONS), dtype=np.float32)
     for horizon in range(HORIZONS):
         decay = np.exp(-horizon / 12.0)
@@ -74,14 +80,13 @@ def generate(output_dir: Path, *, rows: int = 1024, seed: int = 73) -> dict[str,
     feature_names = [f"synthetic_feature_{index:02d}" for index in range(FEATURE_COUNT)]
     schema = (
         "# Synthetic smoke fixture schema; these fields are not railway features.\n"
-        "features:\n"
-        + "".join(f"  - {name}\n" for name in feature_names)
+        "features:\n" + "".join(f"  - {name}\n" for name in feature_names)
     ).encode()
     normalization = (
-        "# Identity transform; synthetic fixture only.\n"
-        "features: standard_normal\n"
-        "targets: synthetic_normalized_delay_units\n"
-    ).encode()
+        b"# Identity transform; synthetic fixture only.\n"
+        b"features: standard_normal\n"
+        b"targets: synthetic_normalized_delay_units\n"
+    )
     (output_dir / "feature-schema.yaml").write_bytes(schema)
     (output_dir / "normalization.yaml").write_bytes(normalization)
     for name, (part_features, part_targets, part_mask) in arrays.items():
@@ -145,9 +150,7 @@ def generate(output_dir: Path, *, rows: int = 1024, seed: int = 73) -> dict[str,
     )
 
     calibration_predictions = predict_mlp(calibration_features, model)
-    np.save(
-        output_dir / "predictions-calibration.npy", calibration_predictions, allow_pickle=False
-    )
+    np.save(output_dir / "predictions-calibration.npy", calibration_predictions, allow_pickle=False)
     calibrated_model = calibrate_artifact(
         model,
         calibration_predictions,
@@ -159,9 +162,8 @@ def generate(output_dir: Path, *, rows: int = 1024, seed: int = 73) -> dict[str,
         json.dumps(calibrated_model, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     raw_predictions = predict_mlp(test_features, calibrated_model, sort_quantiles=False)
-    quantile_crossing = (
-        (raw_predictions[:, :, 0] > raw_predictions[:, :, 1])
-        | (raw_predictions[:, :, 1] > raw_predictions[:, :, 2])
+    quantile_crossing = (raw_predictions[:, :, 0] > raw_predictions[:, :, 1]) | (
+        raw_predictions[:, :, 1] > raw_predictions[:, :, 2]
     )
     predictions = predict(test_features, calibrated_model)
     np.save(output_dir / "predictions.npy", predictions, allow_pickle=False)
@@ -225,12 +227,11 @@ def generate(output_dir: Path, *, rows: int = 1024, seed: int = 73) -> dict[str,
         "calibration": calibrated_model["interval_calibration"],
         "metrics": horizon_metrics,
         "quantile_metrics": quantile_metrics,
-        "quantile_crossing_rate_before_rearrangement": float(
-            quantile_crossing[test_mask].mean()
-        ),
+        "quantile_crossing_rate_before_rearrangement": float(quantile_crossing[test_mask].mean()),
         "limitations": [
             "Generated variables are not RIDE features or railway observations.",
-            "Metrics only confirm a runnable synthetic training path; they say nothing about rail forecasting quality.",
+            "Metrics only confirm a runnable synthetic training path; "
+            "they say nothing about rail forecasting quality.",
         ],
     }
     (output_dir / "report.json").write_text(

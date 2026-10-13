@@ -82,9 +82,7 @@ def calibrate_artifact(
         raise ValueError("Prediction quantile dimension does not match model artifact")
     if abs((levels[-1] - levels[0]) - coverage) > 1e-6:
         raise ValueError("Requested coverage must match the model's outer quantile levels")
-    offsets = calibrate_interval_expansion(
-        predictions, targets, mask, coverage=coverage
-    )
+    offsets = calibrate_interval_expansion(predictions, targets, mask, coverage=coverage)
     actual = np.asarray(targets)
     valid = np.asarray(mask, dtype=bool)
     data_digest = hashlib.sha256(
@@ -114,7 +112,9 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", type=Path, required=True)
-    parser.add_argument("--predictions", type=Path, required=True, help="[rows, 15, quantiles] .npy")
+    parser.add_argument(
+        "--predictions", type=Path, required=True, help="[rows, 15, quantiles] .npy"
+    )
     parser.add_argument("--targets", type=Path, required=True, help="[rows, 15] target .npy")
     parser.add_argument("--mask", type=Path, required=True, help="[rows, 15] validity mask .npy")
     parser.add_argument("--output", type=Path, required=True)
@@ -125,9 +125,7 @@ def main() -> None:
         predictions = np.load(args.predictions, allow_pickle=False)
         targets = np.load(args.targets, allow_pickle=False)
         mask = np.load(args.mask, allow_pickle=False)
-        calibrated = calibrate_artifact(
-            model, predictions, targets, mask, coverage=args.coverage
-        )
+        calibrated = calibrate_artifact(model, predictions, targets, mask, coverage=args.coverage)
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(
             json.dumps(calibrated, indent=2, sort_keys=True) + "\n", encoding="utf-8"
@@ -139,9 +137,7 @@ def main() -> None:
             {
                 "calibrated_model_sha256": calibrated["model_sha256"],
                 "nominal_coverage": args.coverage,
-                "expansion_by_horizon": calibrated["interval_calibration"][
-                    "expansion_by_horizon"
-                ],
+                "expansion_by_horizon": calibrated["interval_calibration"]["expansion_by_horizon"],
                 "output": str(args.output),
             },
             sort_keys=True,

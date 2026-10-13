@@ -168,8 +168,7 @@ def train(
     ):
         raise ValueError("RIDE arrays contain non-finite values in usable training examples")
     if not all(
-        validity.any(axis=0).all()
-        for validity in (m_train, m_early, m_calibration, m_evaluation)
+        validity.any(axis=0).all() for validity in (m_train, m_early, m_calibration, m_evaluation)
     ):
         raise ValueError("Each horizon needs valid train, early-stop, calibration and eval targets")
 
@@ -208,11 +207,15 @@ def train(
                 second_moment_b = beta2 * second_moment_b + (1 - beta2) * gradient_b**2
                 correction1 = 1 - beta1**step
                 correction2 = 1 - beta2**step
-                weights -= effective_learning_rate * (first_moment_w / correction1) / (
-                    np.sqrt(second_moment_w / correction2) + epsilon
+                weights -= (
+                    effective_learning_rate
+                    * (first_moment_w / correction1)
+                    / (np.sqrt(second_moment_w / correction2) + epsilon)
                 )
-                bias -= effective_learning_rate * (first_moment_b / correction1) / (
-                    np.sqrt(second_moment_b / correction2) + epsilon
+                bias -= (
+                    effective_learning_rate
+                    * (first_moment_b / correction1)
+                    / (np.sqrt(second_moment_b / correction2) + epsilon)
                 )
         predictions = x_evaluation @ weights + bias
         model_parameters: dict[str, Any] = {"weights": weights.tolist(), "bias": bias.tolist()}
@@ -299,13 +302,10 @@ def train(
             m_calibration,
             coverage=0.8,
         )
-        raw_quantile_predictions = predict_mlp(
-            x_evaluation, model, sort_quantiles=False
-        )
+        raw_quantile_predictions = predict_mlp(x_evaluation, model, sort_quantiles=False)
         quantile_crossing = (
-            (raw_quantile_predictions[:, :, 0] > raw_quantile_predictions[:, :, 1])
-            | (raw_quantile_predictions[:, :, 1] > raw_quantile_predictions[:, :, 2])
-        )
+            raw_quantile_predictions[:, :, 0] > raw_quantile_predictions[:, :, 1]
+        ) | (raw_quantile_predictions[:, :, 1] > raw_quantile_predictions[:, :, 2])
         quantile_predictions = predict_forecast(x_evaluation, model)
         predictions = quantile_predictions[:, :, 1]
 
@@ -325,9 +325,7 @@ def train(
                 "rmse_normalized": float(np.sqrt(np.mean(errors**2))),
                 "bias_normalized": float(np.mean(errors)),
                 "train_mean_baseline_mae_normalized": baseline_mae,
-                "train_mean_baseline_rmse_normalized": float(
-                    np.sqrt(np.mean(baseline_errors**2))
-                ),
+                "train_mean_baseline_rmse_normalized": float(np.sqrt(np.mean(baseline_errors**2))),
                 "mae_improvement_over_train_mean_pct": (
                     float(100 * (baseline_mae - model_mae) / baseline_mae)
                     if baseline_mae > 0
@@ -377,8 +375,7 @@ def train(
                     "pinball_loss_normalized": [float(value) for value in pinball],
                     "calibrated_p10_p90_coverage": float(
                         np.mean(
-                            (actual >= quantile_values[:, 0])
-                            & (actual <= quantile_values[:, 2])
+                            (actual >= quantile_values[:, 0]) & (actual <= quantile_values[:, 2])
                         )
                     ),
                     "nominal_p10_p90_coverage": 0.8,
@@ -424,9 +421,7 @@ def train(
             )
         },
         "epochs_requested": epochs,
-        "epochs_run": (
-            model_parameters.get("fit_metadata", {}).get("epochs_run", epochs)
-        ),
+        "epochs_run": (model_parameters.get("fit_metadata", {}).get("epochs_run", epochs)),
         "learning_rate": effective_learning_rate,
         "l2_penalty": effective_l2,
         "model_type": model_type,
@@ -447,7 +442,8 @@ def train(
             "This is an observed-delay forecaster, not an OSRD candidate feasibility model.",
             "A bounded deterministic sample is used; rerun with larger limits before conclusions.",
             "The official 2025 holdout was not used for fitting or tuning.",
-            "Internal early-stop, calibration, and evaluation partitions are date-grouped and sampled separately.",
+            "Internal early-stop, calibration, and evaluation partitions are date-grouped "
+            "and sampled separately.",
         ],
     }
     output_dir.mkdir(parents=True, exist_ok=True)

@@ -126,9 +126,7 @@ def main() -> None:
     parser.add_argument("--model", type=Path, required=True, help="trained model.json artifact")
     parser.add_argument("--features", type=Path, required=True, help="2D float .npy feature matrix")
     parser.add_argument("--feature-schema", type=Path, required=True, help="RIDE scheme.yaml")
-    parser.add_argument(
-        "--normalization", type=Path, required=True, help="RIDE normalization.yaml"
-    )
+    parser.add_argument("--normalization", type=Path, required=True, help="RIDE normalization.yaml")
     parser.add_argument("--output", type=Path, required=True, help="destination predictions .npy")
     parser.add_argument("--batch-size", type=int, default=4096)
     args = parser.parse_args()

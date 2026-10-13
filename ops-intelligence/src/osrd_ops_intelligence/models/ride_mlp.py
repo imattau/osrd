@@ -71,9 +71,10 @@ def fit_masked_mlp(
             or not validation_mask.any(axis=0).all()
         ):
             raise ValueError("MLP validation arrays are inconsistent with the training arrays")
-        if not np.isfinite(validation_features).all() or not np.isfinite(
-            validation_targets[validation_mask.astype(bool)]
-        ).all():
+        if (
+            not np.isfinite(validation_features).all()
+            or not np.isfinite(validation_targets[validation_mask.astype(bool)]).all()
+        ):
             raise ValueError("MLP validation arrays contain non-finite usable values")
     if patience <= 0:
         raise ValueError("patience must be positive")
@@ -143,11 +144,15 @@ def fit_masked_mlp(
                 second_w[layer] = beta2 * second_w[layer] + (1 - beta2) * grad_w[layer] ** 2
                 first_b[layer] = beta1 * first_b[layer] + (1 - beta1) * grad_b[layer]
                 second_b[layer] = beta2 * second_b[layer] + (1 - beta2) * grad_b[layer] ** 2
-                weights[layer] -= learning_rate * (first_w[layer] / correction1) / (
-                    np.sqrt(second_w[layer] / correction2) + epsilon
+                weights[layer] -= (
+                    learning_rate
+                    * (first_w[layer] / correction1)
+                    / (np.sqrt(second_w[layer] / correction2) + epsilon)
                 )
-                biases[layer] -= learning_rate * (first_b[layer] / correction1) / (
-                    np.sqrt(second_b[layer] / correction2) + epsilon
+                biases[layer] -= (
+                    learning_rate
+                    * (first_b[layer] / correction1)
+                    / (np.sqrt(second_b[layer] / correction2) + epsilon)
                 )
 
         if validation_supplied:
@@ -162,12 +167,9 @@ def fit_masked_mlp(
             safe_targets = np.where(valid, validation_targets, 0.0)
             horizon_counts = np.maximum(valid.sum(axis=0), 1)
             residual = safe_targets[:, :, None] - validation_predictions
-            pinball = np.maximum(
-                quantile_values * residual, (quantile_values - 1.0) * residual
-            )
-            horizon_loss = (
-                (pinball * valid[:, :, None]).sum(axis=(0, 2))
-                / (horizon_counts * len(quantiles))
+            pinball = np.maximum(quantile_values * residual, (quantile_values - 1.0) * residual)
+            horizon_loss = (pinball * valid[:, :, None]).sum(axis=(0, 2)) / (
+                horizon_counts * len(quantiles)
             )
             score = float(horizon_loss.mean())
             if not np.isfinite(score):
@@ -208,13 +210,21 @@ def predict_mlp(features: Any, model: dict[str, Any], *, sort_quantiles: bool = 
         raise ValueError("MLP features must be a non-empty 2D array")
     if means.ndim != 1 or scales.shape != means.shape or values.shape[1] != means.size:
         raise ValueError("MLP feature normalization does not match input width")
-    if not np.isfinite(values).all() or not np.isfinite(means).all() or not np.isfinite(scales).all():
+    if (
+        not np.isfinite(values).all()
+        or not np.isfinite(means).all()
+        or not np.isfinite(scales).all()
+    ):
         raise ValueError("MLP features or normalization contain non-finite values")
     if (scales <= 0).any() or not weights or len(weights) != len(biases):
         raise ValueError("MLP normalization or layer parameters are invalid")
     previous_width = means.size
     for weight, bias in zip(weights, biases, strict=True):
-        if weight.ndim != 2 or weight.shape[0] != previous_width or bias.shape != (weight.shape[1],):
+        if (
+            weight.ndim != 2
+            or weight.shape[0] != previous_width
+            or bias.shape != (weight.shape[1],)
+        ):
             raise ValueError("MLP layer dimensions are invalid")
         if not np.isfinite(weight).all() or not np.isfinite(bias).all():
             raise ValueError("MLP layer parameters contain non-finite values")
