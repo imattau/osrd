@@ -273,6 +273,8 @@ Phase 4 starts with an offline extraction path from these immutable records into
 
 The first feasibility model is a regularized logistic classifier over that fixed candidate feature schema. Its offline report compares scenario-macro top-1/top-3/top-5 validation yield against the current objective-score order and reports an oracle bound. Promotion and online planner integration are deliberately separate; this model is not loaded by the service, and it cannot certify candidate feasibility.
 
+To reduce top-objective selection bias in future feasibility examples, planning policy can choose `candidate_validation_order=diverse`. The deterministic round-robin covers different edited-service sets before spending additional validation calls on variants of the same edit set. It does not change how returned alternatives are objective-ranked and does not relax OSRD acceptance checks.
+
 ## 12. Assumptions, risks, and unresolved decisions
 
 - Public documentation is not a substitute for checking the exact chosen `dev` SHA. Editoast endpoints and DTOs evolve; regenerate API clients and schema bindings from that checkout.

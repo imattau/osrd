@@ -7,6 +7,7 @@ import json
 from dataclasses import asdict
 
 from osrd_ops_intelligence.api.contracts import (
+    CandidateValidationOrder,
     IncidentKind,
     PlanCandidateResult,
     PlanningObjective,
@@ -99,6 +100,32 @@ def _ranking_key(
     )
 
 
+def _result_ranking_key(
+    candidate: PlanCandidateResult,
+) -> tuple[float, int, int, tuple[str, ...]]:
+    return (
+        candidate.objective_score,
+        candidate.total_shift_seconds,
+        len(candidate.edits),
+        tuple(sorted(edit.train_schedule_id for edit in candidate.edits)),
+    )
+
+
+def _diverse_validation_order(
+    scored: list[tuple[DepartureShiftCandidate, float]],
+) -> list[tuple[DepartureShiftCandidate, float]]:
+    """Round-robin candidate edit patterns, retaining objective order within each pattern."""
+    groups: dict[tuple[str, ...], list[tuple[DepartureShiftCandidate, float]]] = {}
+    for item in scored:
+        signature = tuple(sorted(edit.train_schedule_id for edit in item[0].edits))
+        groups.setdefault(signature, []).append(item)
+    ordered_signatures = sorted(groups, key=lambda signature: (len(signature), signature))
+    result: list[tuple[DepartureShiftCandidate, float]] = []
+    for rank in range(max((len(groups[key]) for key in ordered_signatures), default=0)):
+        result.extend(groups[key][rank] for key in ordered_signatures if rank < len(groups[key]))
+    return result
+
+
 async def plan(request: PlanningRequest, client: OSRDClient) -> PlanningResponse:
     if request.incident.kind != IncidentKind.DELAY:
         raise PlanningInputError("The first planner slice supports delay incidents only")
@@ -149,7 +176,12 @@ async def plan(request: PlanningRequest, client: OSRDClient) -> PlanningResponse
         for candidate in generated
     ]
     scored.sort(key=lambda item: _ranking_key(item[0], item[1]))
-    selected = scored[: request.policy.max_candidates]
+    validation_pool = (
+        _diverse_validation_order(scored)
+        if request.policy.candidate_validation_order == CandidateValidationOrder.DIVERSE
+        else scored
+    )
+    selected = validation_pool[: request.policy.max_candidates]
 
     baseline_validation = await client.validate_candidate(
         snapshot=snapshot,
@@ -166,10 +198,14 @@ async def plan(request: PlanningRequest, client: OSRDClient) -> PlanningResponse
         rendered = _render_candidate(candidate, validation, score)
         (accepted if validation.validated else rejected).append(rendered)
 
+    accepted.sort(key=_result_ranking_key)
+    rejected.sort(key=_result_ranking_key)
+
     return PlanningResponse(
         request_id=request.request_id,
         snapshot=request.snapshot,
         objective=request.policy.objective,
+        candidate_validation_order=request.policy.candidate_validation_order,
         generated_candidate_count=len(generated),
         evaluated_candidate_count=len(selected),
         baseline=baseline,

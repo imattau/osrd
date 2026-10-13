@@ -26,6 +26,7 @@ FEATURE_NAMES = (
     "objective_minimize_total_shift",
     "objective_minimize_changed_services",
     "objective_minimize_weighted_shift",
+    "validation_order_diverse",
 )
 
 
@@ -90,6 +91,7 @@ def _candidate_features(
         "objective_minimize_total_shift": float(objective == "minimize_total_shift"),
         "objective_minimize_changed_services": float(objective == "minimize_changed_services"),
         "objective_minimize_weighted_shift": float(objective == "minimize_weighted_shift"),
+        "validation_order_diverse": float(policy.get("candidate_validation_order") == "diverse"),
     }
     if any(not math.isfinite(value) for value in features.values()):
         raise ValueError("Planning record produced a non-finite candidate feature")

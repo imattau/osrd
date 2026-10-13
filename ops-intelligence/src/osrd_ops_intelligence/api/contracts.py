@@ -28,6 +28,11 @@ class PlanningObjective(StrEnum):
     MINIMIZE_WEIGHTED_SHIFT = "minimize_weighted_shift"
 
 
+class CandidateValidationOrder(StrEnum):
+    OBJECTIVE_FIRST = "objective_first"
+    DIVERSE = "diverse"
+
+
 class AffectedResource(StrictModel):
     resource_type: Literal["track_section", "operational_point", "route", "rolling_stock"]
     resource_id: str = Field(min_length=1)
@@ -91,6 +96,7 @@ class PlanningPolicy(StrictModel):
     max_shift_seconds_by_schedule: dict[str, StrictInt] = Field(
         default_factory=dict, max_length=500
     )
+    candidate_validation_order: CandidateValidationOrder = CandidateValidationOrder.OBJECTIVE_FIRST
 
     @model_validator(mode="after")
     def objective_weights_are_valid(self) -> "PlanningPolicy":
@@ -161,6 +167,7 @@ class PlanningResponse(StrictModel):
     request_id: UUID
     snapshot: SnapshotBinding
     objective: PlanningObjective
+    candidate_validation_order: CandidateValidationOrder = CandidateValidationOrder.OBJECTIVE_FIRST
     generated_candidate_count: int
     evaluated_candidate_count: int
     baseline: PlanCandidateResult

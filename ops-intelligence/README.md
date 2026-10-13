@@ -73,6 +73,12 @@ sets a hard cap (0–7200 seconds) for individual services; omitted services use
 Every response also includes a no-change `pass_through_rules_v1` baseline validated
 against the exact same snapshot. The baseline is separate from the edited-candidate
 budget and is not itself an edit recommendation.
+`policy.candidate_validation_order` defaults to `objective_first`. Set it to
+`diverse` to spend the validation budget round-robin across distinct sets of edited
+services, with lower objective scores first within each set. Returned accepted and
+rejected candidates remain sorted by the selected operator objective. This option
+is useful when collecting broader candidate outcomes; it does not change hard
+constraints or the final OSRD validation gate.
 
 Completed plans are recorded with the full typed request and response, snapshot and
 policy, UTC creation time, and SHA-256 digests. Repeating the same request ID and
