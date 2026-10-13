@@ -16,6 +16,9 @@ dev = [
   "httpx>=0.27,<1",
   "ruff>=0.9,<1",
 ]
+baselines = [
+  "scikit-learn>=1.5,<2",
+]
 rail-data = [
   "huggingface_hub>=0.32,<2",
   "numpy>=2,<3",
@@ -33,6 +36,7 @@ osrd-ride-train = "osrd_ops_intelligence.training.train_ride_forecast:main"
 osrd-ride-predict = "osrd_ops_intelligence.models.forecast:main"
 osrd-ride-calibrate = "osrd_ops_intelligence.models.calibration:main"
 osrd-ride-synthetic-smoke = "osrd_ops_intelligence.training.synthetic_ride_smoke:main"
+osrd-ride-gbdt = "osrd_ops_intelligence.training.ride_gbdt_baseline:main"
 osrd-ride-baseline = "osrd_ops_intelligence.training.ride_baseline:main"
 osrd-plan-ranker-data = "osrd_ops_intelligence.training.plan_ranker_data:main"
 osrd-plan-ranker-train = "osrd_ops_intelligence.training.train_plan_ranker:main"

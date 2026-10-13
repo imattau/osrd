@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -85,31 +86,44 @@ def _sample_indices(candidates: list[int], maximum: int, rng: Any) -> Any:
     return np.sort(rng.choice(candidates, size=maximum, replace=False))
 
 
-def train(
+@dataclass(frozen=True)
+class Partitions:
+    """Chronologically split, sampled RIDE arrays shared by all forecast baselines."""
+
+    manifest: Any
+    service_dates: Any
+    cutoff: Any
+    train_candidates: Any
+    candidate_groups: Any
+    train_indices: Any
+    early_stop_indices: Any
+    calibration_indices: Any
+    evaluation_indices: Any
+    x_train: Any
+    y_train: Any
+    m_train: Any
+    x_early: Any
+    y_early: Any
+    m_early: Any
+    x_calibration: Any
+    y_calibration: Any
+    m_calibration: Any
+    x_evaluation: Any
+    y_evaluation: Any
+    m_evaluation: Any
+
+
+def prepare_partitions(
     dataset_dir: Path,
     *,
-    output_dir: Path,
-    validation_start: date = date(2024, 10, 1),
-    max_train_rows: int = 20_000,
-    max_validation_rows: int = 5_000,
-    epochs: int = 40,
-    batch_size: int = 1024,
-    seed: int = 42,
-    learning_rate: float | None = None,
-    l2: float | None = None,
-    model_type: str = "linear",
-    hidden_dims: tuple[int, ...] = (256, 128),
-) -> dict[str, Any]:
+    validation_start: date,
+    max_train_rows: int,
+    max_validation_rows: int,
+    rng: Any,
+) -> Partitions:
+    """Load RIDE arrays and build train/early-stop/calibration/evaluation partitions."""
     import numpy as np
 
-    effective_learning_rate = (
-        learning_rate if learning_rate is not None else (0.001 if model_type == "mlp" else 0.01)
-    )
-    effective_l2 = l2 if l2 is not None else (0.0001 if model_type == "mlp" else 0.01)
-    if effective_learning_rate <= 0 or effective_l2 < 0:
-        raise ValueError("learning rate must be positive and L2 penalty cannot be negative")
-    if min(max_train_rows, epochs, batch_size) <= 0 or max_validation_rows < 3:
-        raise ValueError("Training limits must be positive and validation rows must be at least 3")
     features, targets, mask, service_dates, manifest = _load_arrays(dataset_dir)
     cutoff = validation_start.isoformat()
     train_candidates = [i for i, day in enumerate(service_dates) if day < cutoff]
@@ -135,7 +149,6 @@ def train(
     if any(not group for group in candidate_groups):
         raise ValueError("A grouped validation partition contains no rows")
 
-    rng = np.random.default_rng(seed)
     train_indices = _sample_indices(train_candidates, max_train_rows, rng)
     per_partition_limit = max(1, max_validation_rows // 3)
     early_stop_indices, calibration_indices, evaluation_indices = tuple(
@@ -171,6 +184,85 @@ def train(
         validity.any(axis=0).all() for validity in (m_train, m_early, m_calibration, m_evaluation)
     ):
         raise ValueError("Each horizon needs valid train, early-stop, calibration and eval targets")
+    return Partitions(
+        manifest=manifest,
+        service_dates=service_dates,
+        cutoff=cutoff,
+        train_candidates=train_candidates,
+        candidate_groups=candidate_groups,
+        train_indices=train_indices,
+        early_stop_indices=early_stop_indices,
+        calibration_indices=calibration_indices,
+        evaluation_indices=evaluation_indices,
+        x_train=x_train,
+        y_train=y_train,
+        m_train=m_train,
+        x_early=x_early,
+        y_early=y_early,
+        m_early=m_early,
+        x_calibration=x_calibration,
+        y_calibration=y_calibration,
+        m_calibration=m_calibration,
+        x_evaluation=x_evaluation,
+        y_evaluation=y_evaluation,
+        m_evaluation=m_evaluation,
+    )
+
+
+def train(
+    dataset_dir: Path,
+    *,
+    output_dir: Path,
+    validation_start: date = date(2024, 10, 1),
+    max_train_rows: int = 20_000,
+    max_validation_rows: int = 5_000,
+    epochs: int = 40,
+    batch_size: int = 1024,
+    seed: int = 42,
+    learning_rate: float | None = None,
+    l2: float | None = None,
+    model_type: str = "linear",
+    hidden_dims: tuple[int, ...] = (256, 128),
+) -> dict[str, Any]:
+    import numpy as np
+
+    effective_learning_rate = (
+        learning_rate if learning_rate is not None else (0.001 if model_type == "mlp" else 0.01)
+    )
+    effective_l2 = l2 if l2 is not None else (0.0001 if model_type == "mlp" else 0.01)
+    if effective_learning_rate <= 0 or effective_l2 < 0:
+        raise ValueError("learning rate must be positive and L2 penalty cannot be negative")
+    if min(max_train_rows, epochs, batch_size) <= 0 or max_validation_rows < 3:
+        raise ValueError("Training limits must be positive and validation rows must be at least 3")
+    rng = np.random.default_rng(seed)
+    parts = prepare_partitions(
+        dataset_dir,
+        validation_start=validation_start,
+        max_train_rows=max_train_rows,
+        max_validation_rows=max_validation_rows,
+        rng=rng,
+    )
+    manifest = parts.manifest
+    service_dates = parts.service_dates
+    cutoff = parts.cutoff
+    train_candidates = parts.train_candidates
+    candidate_groups = parts.candidate_groups
+    train_indices = parts.train_indices
+    early_stop_indices = parts.early_stop_indices
+    calibration_indices = parts.calibration_indices
+    evaluation_indices = parts.evaluation_indices
+    x_train = parts.x_train
+    y_train = parts.y_train
+    m_train = parts.m_train
+    x_early = parts.x_early
+    y_early = parts.y_early
+    m_early = parts.m_early
+    x_calibration = parts.x_calibration
+    y_calibration = parts.y_calibration
+    m_calibration = parts.m_calibration
+    x_evaluation = parts.x_evaluation
+    y_evaluation = parts.y_evaluation
+    m_evaluation = parts.m_evaluation
 
     # A train-only target mean is a stronger and leakage-safe reference than
     # assuming normalized zero is the mean for every horizon.

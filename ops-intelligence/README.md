@@ -158,6 +158,26 @@ both fitting and calibration.
 Split-conformal coverage is marginal and relies on calibration/evaluation exchangeability;
 railway time drift can break that assumption, so monitor coverage by time and corridor.
 
+### GBDT baseline
+
+The design requires the neural forecaster to beat a gradient-boosted reference. The GBDT
+baseline fits one histogram GBDT per horizon and p10/p50/p90 quantile on the identical
+partitions, applies the same split-conformal interval expansion, and writes a comparable
+report. Boosting stages are chosen on the chronological early-stop group, not a random
+split. It is a report-only baseline; no servable artifact is exported.
+
+```sh
+uv sync --extra rail-data --extra baselines
+uv run osrd-ride-train --model mlp --output-dir data/rail/ride-forecast-mlp
+uv run osrd-ride-gbdt --output-dir data/rail/ride-forecast-gbdt \
+  --compare-report data/rail/ride-forecast-mlp/report.json
+```
+
+Pass the same seed, row limits and `--validation-start` to both commands;
+`--compare-report` refuses a different dataset revision or seed. Positive
+`mlp_improvement_over_gbdt_pct` means the MLP has lower calibrated mean pinball loss.
+The RIDE tabular training files must be fully downloaded and hash-verified first.
+
 RIDE Gold Lite also publishes a PyTorch Geometric heterogeneous GNN representation.
 The schemas and checksums we retrieved are recorded in
 [`data_contracts/ride/gold-lite-gnn-manifest.json`](data_contracts/ride/gold-lite-gnn-manifest.json),
