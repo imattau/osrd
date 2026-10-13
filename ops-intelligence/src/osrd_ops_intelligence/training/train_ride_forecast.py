@@ -9,7 +9,7 @@ import argparse
 import hashlib
 import json
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +29,13 @@ def _sha256(path: Path) -> str:
         while chunk := source.read(1024 * 1024):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _indices_sha256(indices: Any) -> str:
+    """Hash sampled row indices in a platform-independent integer encoding."""
+    import numpy as np
+
+    return hashlib.sha256(np.asarray(indices, dtype="<i8").tobytes()).hexdigest()
 
 
 def _load_arrays(dataset_dir: Path) -> tuple[Any, Any, Any, list[str], dict[str, Any]]:
@@ -64,7 +71,7 @@ def _load_arrays(dataset_dir: Path) -> tuple[Any, Any, Any, list[str], dict[str,
     metadata = np.load(root / "md.npy", allow_pickle=True)
     if metadata.shape != (features.shape[0], 3):
         raise ValueError("RIDE metadata does not match the documented row count and 3 fields")
-    service_dates = [str(value)[:10] for value in metadata[:, 2]]
+    service_dates = [_normalize_service_date(value) for value in metadata[:, 2]]
     if not all(_is_iso_date(value) for value in service_dates):
         raise ValueError("RIDE metadata contains an invalid service date")
     return features, targets, mask, service_dates, manifest
@@ -76,6 +83,30 @@ def _is_iso_date(value: str) -> bool:
     except ValueError:
         return False
     return True
+
+
+def _normalize_service_date(value: Any) -> str:
+    """Normalize RIDE's ``DDMMMYYYY`` metadata date to ISO format."""
+    text = str(value)
+    try:
+        return date.fromisoformat(text[:10]).isoformat()
+    except ValueError:
+        try:
+            return datetime.strptime(text, "%d%b%Y").date().isoformat()
+        except ValueError as error:
+            raise ValueError(f"Invalid RIDE service date: {text!r}") from error
+
+
+def _inverse_ride_delay(values: Any, normalization: dict[str, Any]) -> Any:
+    """Invert RIDE's z-score-after-signed-sqrt transform to delay seconds."""
+    import numpy as np
+
+    if normalization.get("norm") != "zscore" or normalization.get("sqrt") is not True:
+        raise ValueError("Expected RIDE's signed-square-root z-score for delay values")
+    root_values = np.asarray(values, dtype=np.float64) * normalization["std"] + normalization[
+        "mean"
+    ]
+    return np.sign(root_values) * np.square(root_values)
 
 
 def _sample_indices(candidates: list[int], maximum: int, rng: Any) -> Any:
@@ -119,7 +150,8 @@ def prepare_partitions(
     validation_start: date,
     max_train_rows: int,
     max_validation_rows: int,
-    rng: Any,
+    train_rng: Any,
+    validation_rng: Any,
 ) -> Partitions:
     """Load RIDE arrays and build train/early-stop/calibration/evaluation partitions."""
     import numpy as np
@@ -149,10 +181,10 @@ def prepare_partitions(
     if any(not group for group in candidate_groups):
         raise ValueError("A grouped validation partition contains no rows")
 
-    train_indices = _sample_indices(train_candidates, max_train_rows, rng)
+    train_indices = _sample_indices(train_candidates, max_train_rows, train_rng)
     per_partition_limit = max(1, max_validation_rows // 3)
     early_stop_indices, calibration_indices, evaluation_indices = tuple(
-        _sample_indices(group, per_partition_limit, rng) for group in candidate_groups
+        _sample_indices(group, per_partition_limit, validation_rng) for group in candidate_groups
     )
     x_train = np.asarray(features[train_indices], dtype=np.float32)
     y_train = np.asarray(targets[train_indices], dtype=np.float32)
@@ -219,6 +251,7 @@ def train(
     epochs: int = 40,
     batch_size: int = 1024,
     seed: int = 42,
+    validation_seed: int = 42,
     learning_rate: float | None = None,
     l2: float | None = None,
     model_type: str = "linear",
@@ -234,13 +267,16 @@ def train(
         raise ValueError("learning rate must be positive and L2 penalty cannot be negative")
     if min(max_train_rows, epochs, batch_size) <= 0 or max_validation_rows < 3:
         raise ValueError("Training limits must be positive and validation rows must be at least 3")
-    rng = np.random.default_rng(seed)
+    train_rng = np.random.default_rng(seed)
+    validation_rng = np.random.default_rng(validation_seed)
+    optimization_rng = np.random.default_rng(seed)
     parts = prepare_partitions(
         dataset_dir,
         validation_start=validation_start,
         max_train_rows=max_train_rows,
         max_validation_rows=max_validation_rows,
-        rng=rng,
+        train_rng=train_rng,
+        validation_rng=validation_rng,
     )
     manifest = parts.manifest
     service_dates = parts.service_dates
@@ -264,6 +300,31 @@ def train(
     y_evaluation = parts.y_evaluation
     m_evaluation = parts.m_evaluation
 
+    try:
+        import yaml
+    except ImportError as error:
+        raise RuntimeError(
+            "Install the optional data dependencies: uv sync --extra rail-data"
+        ) from error
+    scheme = yaml.safe_load((dataset_dir / "tabular" / "scheme.yaml").read_text())
+    normalization = yaml.safe_load(
+        (dataset_dir / "tabular" / "normalization.yaml").read_text()
+    )
+    feature_columns = scheme["x_columns"]
+    last_delay_column = feature_columns.index("past_delay_sec_1")
+    last_known_delay_seconds = _inverse_ride_delay(
+        x_evaluation[:, last_delay_column], normalization["past_delay_sec_1"]
+    )
+    target_delay_change_seconds = np.column_stack(
+        [
+            _inverse_ride_delay(y_evaluation[:, horizon], normalization[f"future_delay_delta_{horizon + 1}"])
+            for horizon in range(y_evaluation.shape[1])
+        ]
+    )
+    # RIDE's learned labels are future delay changes relative to the last known
+    # delay, while its shared evaluation target is absolute future delay.
+    target_seconds = target_delay_change_seconds + last_known_delay_seconds[:, None]
+
     # A train-only target mean is a stronger and leakage-safe reference than
     # assuming normalized zero is the mean for every horizon.
     target_means = np.asarray(
@@ -283,7 +344,7 @@ def train(
         step = 0
         beta1, beta2, epsilon = 0.9, 0.999, 1e-8
         for _epoch in range(1, epochs + 1):
-            order = rng.permutation(len(x_train))
+            order = optimization_rng.permutation(len(x_train))
             for start in range(0, len(order), batch_size):
                 batch = order[start : start + batch_size]
                 x_batch = x_train[batch]
@@ -401,14 +462,38 @@ def train(
         quantile_predictions = predict_forecast(x_evaluation, model)
         predictions = quantile_predictions[:, :, 1]
 
+    predicted_delay_change_seconds = np.column_stack(
+        [
+            _inverse_ride_delay(predictions[:, horizon], normalization[f"future_delay_delta_{horizon + 1}"])
+            for horizon in range(y_evaluation.shape[1])
+        ]
+    )
+    predictions_seconds = predicted_delay_change_seconds + last_known_delay_seconds[:, None]
+    persistence_seconds_by_horizon = np.repeat(
+        last_known_delay_seconds[:, None], y_evaluation.shape[1], axis=1
+    )
+
     per_horizon: list[dict[str, float | int]] = []
+    macro_mae_seconds: list[float] = []
+    macro_rmse_seconds: list[float] = []
+    macro_persistence_mae_seconds: list[float] = []
     for horizon in range(y_evaluation.shape[1]):
         valid = m_evaluation[:, horizon]
         errors = predictions[valid, horizon] - y_evaluation[valid, horizon]
         baseline_errors = target_means[horizon] - y_evaluation[valid, horizon]
         zero_errors = -y_evaluation[valid, horizon]
+        errors_seconds = predictions_seconds[valid, horizon] - target_seconds[valid, horizon]
+        persistence_errors_seconds = (
+            persistence_seconds_by_horizon[valid, horizon] - target_seconds[valid, horizon]
+        )
         model_mae = float(np.mean(np.abs(errors)))
         baseline_mae = float(np.mean(np.abs(baseline_errors)))
+        model_mae_seconds = float(np.mean(np.abs(errors_seconds)))
+        model_rmse_seconds = float(np.sqrt(np.mean(errors_seconds**2)))
+        persistence_mae_seconds = float(np.mean(np.abs(persistence_errors_seconds)))
+        macro_mae_seconds.append(model_mae_seconds)
+        macro_rmse_seconds.append(model_rmse_seconds)
+        macro_persistence_mae_seconds.append(persistence_mae_seconds)
         per_horizon.append(
             {
                 "horizon": horizon + 1,
@@ -424,6 +509,22 @@ def train(
                     else 0.0
                 ),
                 "zero_normalized_baseline_mae": float(np.mean(np.abs(zero_errors))),
+                "mae_seconds": model_mae_seconds,
+                "rmse_seconds": model_rmse_seconds,
+                "bias_seconds": float(np.mean(errors_seconds)),
+                "persistence_baseline_mae_seconds": persistence_mae_seconds,
+                "persistence_baseline_rmse_seconds": float(
+                    np.sqrt(np.mean(persistence_errors_seconds**2))
+                ),
+                "mae_improvement_over_persistence_pct": (
+                    float(
+                        100
+                        * (persistence_mae_seconds - model_mae_seconds)
+                        / persistence_mae_seconds
+                    )
+                    if persistence_mae_seconds > 0
+                    else 0.0
+                ),
             }
         )
 
@@ -459,12 +560,21 @@ def train(
             residuals = actual[:, None] - quantile_values
             levels = np.asarray(FORECAST_QUANTILES, dtype=np.float32)
             pinball = np.maximum(levels * residuals, (levels - 1) * residuals).mean(axis=0)
+            actual_seconds = target_seconds[valid, horizon]
+            quantile_seconds = _inverse_ride_delay(
+                quantile_values, normalization[f"future_delay_delta_{horizon + 1}"]
+            ) + last_known_delay_seconds[valid, None]
+            residuals_seconds = actual_seconds[:, None] - quantile_seconds
+            pinball_seconds = np.maximum(
+                levels * residuals_seconds, (levels - 1) * residuals_seconds
+            ).mean(axis=0)
             quantile_report.append(
                 {
                     "horizon": horizon + 1,
                     "valid_count": int(valid.sum()),
                     "quantile_levels": list(FORECAST_QUANTILES),
                     "pinball_loss_normalized": [float(value) for value in pinball],
+                    "pinball_loss_seconds": [float(value) for value in pinball_seconds],
                     "calibrated_p10_p90_coverage": float(
                         np.mean(
                             (actual >= quantile_values[:, 0]) & (actual <= quantile_values[:, 2])
@@ -476,6 +586,9 @@ def train(
                     ),
                     "mean_p10_p90_width_normalized": float(
                         np.mean(quantile_values[:, 2] - quantile_values[:, 0])
+                    ),
+                    "mean_p10_p90_width_seconds": float(
+                        np.mean(quantile_seconds[:, 2] - quantile_seconds[:, 0])
                     ),
                 }
             )
@@ -505,6 +618,12 @@ def train(
         "early_stop_sample_rows": len(early_stop_indices),
         "calibration_sample_rows": len(calibration_indices),
         "evaluation_sample_rows": len(evaluation_indices),
+        "sampled_row_indices_sha256": {
+            "train": _indices_sha256(train_indices),
+            "early_stop": _indices_sha256(early_stop_indices),
+            "calibration": _indices_sha256(calibration_indices),
+            "evaluation": _indices_sha256(evaluation_indices),
+        },
         "training_rows_available_before_sampling": len(train_candidates),
         "validation_rows_available_before_sampling": {
             name: len(group)
@@ -519,7 +638,24 @@ def train(
         "model_type": model_type,
         "hidden_dims": list(hidden_dims) if model_type == "mlp" else [],
         "seed": seed,
+        "validation_seed": validation_seed,
         "metrics": per_horizon,
+        "target_unit": "absolute future delay in seconds (last known delay plus inverse-transformed RIDE delay change)",
+        "training_label_unit": "future delay change relative to last known delay, in provider-normalized units",
+        "macro_metrics_seconds": {
+            "mae": float(np.mean(macro_mae_seconds)),
+            "rmse": float(np.mean(macro_rmse_seconds)),
+            "persistence_baseline_mae": float(np.mean(macro_persistence_mae_seconds)),
+            "mae_improvement_over_persistence_pct": (
+                float(
+                    100
+                    * (np.mean(macro_persistence_mae_seconds) - np.mean(macro_mae_seconds))
+                    / np.mean(macro_persistence_mae_seconds)
+                )
+                if np.mean(macro_persistence_mae_seconds) > 0
+                else 0.0
+            ),
+        },
         "quantile_metrics": quantile_report,
         "interval_calibration": model.get("interval_calibration"),
         "quantile_crossing_rate_before_rearrangement": (
@@ -560,6 +696,7 @@ def main() -> None:
     parser.add_argument("--epochs", type=int, default=40)
     parser.add_argument("--batch-size", type=int, default=1024)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--validation-seed", type=int, default=42)
     parser.add_argument("--learning-rate", type=float)
     parser.add_argument("--l2", type=float)
     parser.add_argument("--model", choices=("linear", "mlp"), default="linear")
@@ -581,6 +718,7 @@ def main() -> None:
             epochs=args.epochs,
             batch_size=args.batch_size,
             seed=args.seed,
+            validation_seed=args.validation_seed,
             learning_rate=args.learning_rate,
             l2=args.l2,
             model_type=args.model,

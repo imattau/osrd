@@ -89,17 +89,18 @@ def run(
     learning_rate: float = 0.05,
     max_depth: int | None = 6,
     seed: int = 42,
+    validation_seed: int = 42,
     compare_report: Path | None = None,
 ) -> dict[str, Any]:
     import numpy as np
 
-    rng = np.random.default_rng(seed)
     parts = prepare_partitions(
         dataset_dir,
         validation_start=validation_start,
         max_train_rows=max_train_rows,
         max_validation_rows=max_validation_rows,
-        rng=rng,
+        train_rng=np.random.default_rng(seed),
+        validation_rng=np.random.default_rng(validation_seed),
     )
     model = fit_gbdt_quantiles(
         parts.x_train,
@@ -145,6 +146,7 @@ def run(
         "dataset_revision": parts.manifest["revision"],
         "validation_start_service_date": parts.cutoff,
         "seed": seed,
+        "validation_seed": validation_seed,
         "quantiles": list(FORECAST_QUANTILES),
         "gbdt_config": {
             "max_iter": max_iter,
@@ -176,6 +178,7 @@ def run(
         if (
             mlp_report.get("dataset_revision") != report["dataset_revision"]
             or mlp_report.get("seed") != seed
+            or mlp_report.get("validation_seed", 42) != validation_seed
         ):
             raise ValueError("Comparison report must use the same dataset revision and seed")
         mlp_loss = mlp_mean_pinball(mlp_report)
@@ -210,6 +213,7 @@ def main() -> None:
     parser.add_argument("--learning-rate", type=float, default=0.05)
     parser.add_argument("--max-depth", type=int, default=6)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--validation-seed", type=int, default=42)
     parser.add_argument(
         "--compare-report", type=Path, help="report.json from `osrd-ride-train --model mlp`"
     )
@@ -225,6 +229,7 @@ def main() -> None:
             learning_rate=args.learning_rate,
             max_depth=args.max_depth,
             seed=args.seed,
+            validation_seed=args.validation_seed,
             compare_report=args.compare_report,
         )
     except (OSError, ValueError, RuntimeError, ImportError) as error:

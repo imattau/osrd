@@ -132,9 +132,26 @@ The trainer verifies every pinned input, memory-maps the 5.7 GB feature matrix, 
 up to 20,000 fit rows and 5,000 later rows grouped by service date. Dates after the
 default 2024-10-01 cutoff are split chronologically into early-stop, calibration, and
 internal-evaluation groups. It optimizes only valid targets and does not load or score
-the 2025 holdout. Its report compares each horizon with a train-only mean, includes
-signed bias, and breaks evaluation metrics out by service month. Metrics are in
-provider-normalized target units; see the readiness plan for interpretation and limits.
+the 2025 holdout. Its report compares each horizon with a train-only mean and a
+persistence reference, includes signed bias, and breaks evaluation metrics out by
+service month. It reports provider-normalized target-change metrics and absolute-delay
+metrics in seconds. For the latter, it inverts RIDE's signed-square-root z-score on
+the future-delay change and adds the latest known delay, so model outputs and the
+persistence reference are scored against the same absolute target. See the readiness
+plan for the exploratory comparison and its limits.
+
+For the larger bounded comparison, keep the validation rows fixed while varying only
+the fit sample and training seed:
+
+```sh
+uv run osrd-ride-train --model mlp --max-train-rows 500000 \
+  --max-validation-rows 15000 --seed 42 --validation-seed 42 \
+  --output-dir data/rail/ride-forecast-mlp-500k
+```
+
+Use the same options with `--model linear` for its baseline. `--seed` changes training
+sampling and optimization; `--validation-seed` fixes early-stop, calibration, and
+evaluation rows so runs remain directly comparable.
 
 The trainer can also fit the first neural baseline, a small feed-forward MLP over the
 same RIDE tabular features. It uses train-only feature standardization, two ReLU hidden
@@ -173,7 +190,7 @@ uv run osrd-ride-gbdt --output-dir data/rail/ride-forecast-gbdt \
   --compare-report data/rail/ride-forecast-mlp/report.json
 ```
 
-Pass the same seed, row limits and `--validation-start` to both commands;
+Pass the same `--seed`, `--validation-seed`, row limits and `--validation-start` to both commands;
 `--compare-report` refuses a different dataset revision or seed. Positive
 `mlp_improvement_over_gbdt_pct` means the MLP has lower calibrated mean pinball loss.
 The RIDE tabular training files must be fully downloaded and hash-verified first.

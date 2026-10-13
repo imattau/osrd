@@ -213,19 +213,75 @@ punctuality data supplies that label.
 - [x] Add split-conformal interval expansion with per-horizon offsets recorded in the artifact.
 - [x] Integrate disjoint service-date early-stop, calibration, and evaluation groups into RIDE training.
 - [x] Add a synthetic smoke fixture with train, early-stop, calibration, and test partitions.
-- [ ] Evaluate calibrated coverage and quantile crossing rates on real held-out dates.
-- [ ] Compare linear and MLP runs on identical samples before selecting either model.
+- [x] Evaluate calibrated coverage and quantile crossing rates on real held-out dates.
+- [x] Compare linear and MLP runs on identical samples before selecting either model.
 - [ ] Retrieve the RIDE GNN feature schema and normalization metadata; inspect the official PyG shard builder/loader before designing our own representation.
 - [ ] Download only the pinned GNN schema, normalization and train shards; inspect serialized keys/labels in an isolated environment and validate the graph-to-target join.
 - [ ] Implement a bounded RIDE GNN benchmark on the same Gold Lite training protocol and compare it with linear/MLP baselines before touching official test graphs.
 - [ ] Design an OSRD RailJSON graph adapter separately; RIDE's station/event graph lacks track/switch/signal/block resource semantics.
-- [ ] Fetch the multi-gigabyte training files and run the first fit; transfer was stopped
-      after measuring the throughput, before any source array was completed.
+- [x] Fetch the pinned multi-gigabyte tabular training files and run the first fit.
 - [ ] Compare with the existing 2025 persistence report without tuning on test metrics.
 - [ ] Keep model serving disconnected from the planning API until the offline result,
       applicability limits and safety review justify integration.
 - [ ] Separately restart OSRD, populate an infrastructure and timetable, and collect
       scenario-diverse audit records for the candidate-feasibility ranker.
+
+### Exploratory 100k-row comparison
+
+These corrected fits use RIDE revision `e5c1ed1126bca1784eb6ea93816dd6cc89afa544`,
+100,000 sampled training rows, and a fixed validation seed of 42. The same 5,000-row
+early-stop, calibration, and December 2024 evaluation samples are reused across all model
+and training seeds. The official 2025 test period was not loaded or scored.
+
+RIDE's tabular labels are named `future_delay_delta_*`, while the shared benchmark table
+defines absolute future-delay targets and documents the last-known delay. Seconds metrics
+therefore invert the published signed-square-root z-score for the future-delay change,
+then add the same row's latest known delay to both the target and model prediction. The
+persistence reference uses that latest known delay directly. This corrects an initial
+comparison that incorrectly compared the delay change directly with the absolute-delay
+reference; those earlier figures are superseded. The upstream dataset builder's target
+construction still needs a direct source audit before treating this interpretation as
+fully verified.
+
+| Training seed | Linear MAE (s) | MLP MAE (s) | Persistence MAE (s) |
+| ---: | ---: | ---: | ---: |
+| 42 | 85.85 | 85.75 | 91.44 |
+| 43 | 90.22 | 85.25 | 91.44 |
+| 44 | 88.85 | 83.69 | 91.44 |
+| Mean ± sample SD | 88.31 ± 2.23 | 84.89 ± 1.07 | 91.44 ± 0.00 |
+
+Macro RMSE averaged 183.10 s for linear and 183.43 s for MLP. The MLP's average MAE
+improvement over persistence was 7.16%; linear's was 3.42%. MLP calibrated interval
+coverage averaged 80.9%, with about 276 s mean p10–p90 width. This is a small three-seed,
+single-period internal comparison, not a deployment claim. The MLP MAE edge is modest and
+does not establish generalization across service periods; next validate the target builder,
+report horizon and subgroup tails, then do one final untouched 2025 evaluation after the
+model and protocol are frozen. Reports and model artifacts remain under ignored
+`ops-intelligence/data/rail/ride-forecast-{linear,mlp}-seedNN-100k/` plus the seed-42
+directories without the seed suffix.
+
+### 500k-row sample-size comparison
+
+The next fit increased only the fit sample to 500,000 rows. It used training seeds 42,
+43, and 44, with validation seed 42 and the same early-stop, calibration, and evaluation
+rows for every run. The evaluation-index SHA-256 matched across all six reports, and the
+2025 test period remained unused.
+
+| Fit rows | Model | Macro MAE, mean ± sample SD (s) | Macro RMSE, mean ± sample SD (s) | MAE improvement over persistence |
+| ---: | --- | ---: | ---: | ---: |
+| 100k | Linear | 88.31 ± 2.23 | 183.10 ± 0.07 | 3.42% |
+| 100k | MLP | 84.89 ± 1.07 | 183.43 ± 1.33 | 7.16% |
+| 500k | Linear | 87.90 ± 3.06 | 183.49 ± 1.11 | 3.87% |
+| 500k | MLP | 80.73 ± 0.63 | 180.01 ± 0.71 | 11.71% |
+
+The persistence macro MAE was 91.44 s on the shared evaluation rows. Increasing to 500k
+helped the MLP by about 4.16 s (4.9%) in mean MAE, while the linear baseline was nearly
+unchanged. At 500k the MLP's mean calibrated coverage was 80.7%, with about 262 s mean
+p10–p90 width. This supports using the MLP as the current offline candidate, not a serving
+decision: it still needs the upstream target-builder audit, wider temporal and subgroup
+evaluation, and one final frozen evaluation on the reserved 2025 test period. The
+500k reports and artifacts are under ignored
+`ops-intelligence/data/rail/ride-forecast-{linear,mlp}-seed{42,43,44}-500k/`.
 
 ## References
 
