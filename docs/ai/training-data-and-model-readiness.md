@@ -233,14 +233,19 @@ These corrected fits use RIDE revision `e5c1ed1126bca1784eb6ea93816dd6cc89afa544
 early-stop, calibration, and December 2024 evaluation samples are reused across all model
 and training seeds. The official 2025 test period was not loaded or scored.
 
-RIDE's tabular labels are named `future_delay_delta_*`, while the shared benchmark table
-defines absolute future-delay targets and documents the last-known delay. Seconds metrics
-therefore invert the published signed-square-root z-score for the future-delay change,
+RIDE's tabular labels are named `future_delay_delta_*`; the model predicts these
+provider-normalized delta targets, while the shared benchmark table defines absolute
+future-delay targets and documents the last-known delay. Seconds metrics therefore invert
+the published signed-square-root z-score for the future-delay change,
 then add the same row's latest known delay to both the target and model prediction. The
 persistence reference uses that latest known delay directly. This corrects an initial
 comparison that incorrectly compared the delay change directly with the absolute-delay
-reference; those earlier figures are superseded. The upstream dataset builder's target
-construction still needs a direct source audit before treating this interpretation as
+reference; those earlier figures are superseded. The RIDE dataset-extension guide says
+model-specific builders must preserve the shared Gold-core target definition while changing
+only the representation. The pinned Gold Lite schema identifies learned labels as
+`future_delay_delta_1` through `future_delay_delta_15`; the training artifact and prediction
+CLI now state this output space explicitly. The upstream source implementation of the delta
+calculation still needs a direct audit before treating the exact subtraction convention as
 fully verified.
 
 | Training seed | Linear MAE (s) | MLP MAE (s) | Persistence MAE (s) |

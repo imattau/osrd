@@ -1,4 +1,4 @@
-"""Load and run an offline RIDE delay forecast artifact."""
+"""Load and run an offline RIDE future-delay-change forecast artifact."""
 
 from __future__ import annotations
 
@@ -43,7 +43,7 @@ def load_model(path: Path) -> dict[str, Any]:
 
 
 def predict(features: Any, model: dict[str, Any], *, batch_size: int = 4096) -> Any:
-    """Predict normalized delay targets for a batch of provider-schema feature rows."""
+    """Predict normalized future-delay changes for provider-schema feature rows."""
     import numpy as np
 
     values = np.asarray(features, dtype=np.float32)
@@ -156,7 +156,7 @@ def main() -> None:
                 "prediction_space": (
                     "synthetic target units"
                     if model.get("data_provenance", {}).get("synthetic") is True
-                    else "RIDE provider-normalized delay target units"
+                    else "RIDE provider-normalized future-delay-change units"
                 ),
                 "output": str(args.output),
                 "operationally_approved": False,

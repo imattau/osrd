@@ -134,8 +134,9 @@ default 2024-10-01 cutoff are split chronologically into early-stop, calibration
 internal-evaluation groups. It optimizes only valid targets and does not load or score
 the 2025 holdout. Its report compares each horizon with a train-only mean and a
 persistence reference, includes signed bias, and breaks evaluation metrics out by
-service month. It reports provider-normalized target-change metrics and absolute-delay
-metrics in seconds. For the latter, it inverts RIDE's signed-square-root z-score on
+service month. The model predicts the provider-normalized `future_delay_delta` targets;
+it reports target-change metrics and absolute-delay metrics in seconds. For the latter,
+it inverts RIDE's signed-square-root z-score on
 the future-delay change and adds the latest known delay, so model outputs and the
 persistence reference are scored against the same absolute target. See the readiness
 plan for the exploratory comparison and its limits.
