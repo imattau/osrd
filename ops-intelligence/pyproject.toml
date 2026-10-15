@@ -26,6 +26,10 @@ rail-data = [
   "pandas>=2.2,<4",
   "pyarrow>=22,<27",
 ]
+gnn = [
+  "torch>=2.6,<3",
+  "torch-geometric>=2.6,<3",
+]
 
 [project.scripts]
 osrd-ops-api = "osrd_ops_intelligence.service.app:run"
@@ -34,6 +38,8 @@ osrd-overlap-baseline = "osrd_ops_intelligence.training.overlap_baseline:main"
 osrd-replay-train = "osrd_ops_intelligence.training.train_replay:main"
 osrd-ride-fetch-core = "osrd_ops_intelligence.training.ride_core:main"
 osrd-ride-fetch-training = "osrd_ops_intelligence.training.ride_training_data:main"
+osrd-ride-fetch-gnn-training = "osrd_ops_intelligence.training.ride_gnn_data:main"
+osrd-ride-gnn-train = "osrd_ops_intelligence.training.train_ride_gnn:main"
 osrd-ride-train = "osrd_ops_intelligence.training.train_ride_forecast:main"
 osrd-ride-predict = "osrd_ops_intelligence.models.forecast:main"
 osrd-ride-calibrate = "osrd_ops_intelligence.models.calibration:main"
@@ -62,6 +68,14 @@ pythonVersion = "3.11"
 typeCheckingMode = "strict"
 include = ["src"]
 extraPaths = ["src"]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

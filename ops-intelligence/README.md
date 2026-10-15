@@ -203,14 +203,57 @@ and the graph/data design and acquisition constraints are in the readiness docum
 The GNN shards are not downloaded by the tabular fetch command. From the upstream RIDE
 repository root, `python -m scripts.dataset.download.download_dataset --target
 gold_lite_gnn` is the official route, but fetches the whole GNN component including its
-test shard. For controlled training, selectively fetch only `gnn/feature_spec.yaml`,
-`gnn/normalization.yaml`, and `gnn/train/*.pt` from revision
-`e5c1ed1126bca1784eb6ea93816dd6cc89afa544`, then verify the manifest hashes before
-loading. The first graph model should be an optional offline PyTorch/PyG path that
-predicts the same 15 delay horizons and masks as the tabular models, with date-grouped
-splits and shared event-level scoring. Do not use the test shard until model selection
-is frozen. The published RIDE graph represents train/station/event interactions; it is
-not an OSRD track/switch/signal graph and cannot replace OSRD validation of a timetable.
+test shard. For controlled training, run this train-only fetch command from
+`ops-intelligence/`:
+
+```sh
+uv sync --extra rail-data --extra gnn
+uv run osrd-ride-fetch-gnn-training
+```
+
+It fetches only `gnn/feature_spec.yaml`, `gnn/normalization.yaml`, and the two
+`gnn/train/*.pt` shards from revision `e5c1ed1126bca1784eb6ea93816dd6cc89afa544`,
+verifies their manifest hashes, and writes a provenance manifest under
+`data/rail/ride-gold-lite-gnn-training/`. It never requests the test shard. The first
+graph model is an optional offline PyTorch/PyG path. The published graph represents
+train/station/event interactions; it is not an OSRD track/switch/signal graph and cannot
+replace OSRD validation of a timetable. Do not use the test shard until model selection
+is frozen.
+
+The first local graph model is an edge-aware heterogeneous GATv2: it encodes train and
+station nodes, exchanges messages over the six directed station/past/future relations,
+and predicts normalized delay change on each train-to-future-station edge. The trainer
+splits snapshots chronologically by UTC day, keeps each day together, uses the later
+20% of days for early stopping, and reports MAE/RMSE in seconds after inverting RIDE's
+signed-square-root target normalization. It verifies both shard hashes before loading
+and never touches held-out graph files. This is an initial benchmark implementation,
+not yet an upstream RIDE GNN reproduction or an OSRD timetable model.
+
+Run it from `ops-intelligence/` after downloading the training graph files:
+
+```sh
+uv run osrd-ride-gnn-train
+```
+
+The model defaults follow the published Lite scale (128 hidden channels, six layers,
+mean relation aggregation, dropout 0.15, and up to 34 epochs) with early stopping. The
+trainer prepares reusable 128-snapshot chunks under `data/rail/` and trains from one
+chunk at a time; CPU batch size defaults to 4. It writes an atomic recovery checkpoint
+every 100 optimizer steps and after each 10 chunks, as well as after every epoch. The
+best model and recovery checkpoint are in the ignored `artifacts/` directory. If a run
+is interrupted, rerun the same command with `--resume` to continue from the most recent
+recovery point:
+
+```sh
+uv run osrd-ride-gnn-train --resume
+```
+
+For a bounded development run, pass `--max-graphs 64 --epochs 2 --batch-size 2`; use
+`--chunk-size` to adjust preprocessing memory and `--checkpoint-every-steps` to change
+how often optimizer progress is saved. The serialized train-node tensor has
+32 columns while the pinned feature specification lists 31; the current model uses the
+stored width and records this schema discrepancy for follow-up before any benchmark
+claim.
 
 To run a saved linear or MLP artifact on a compatible feature matrix, use the offline
 predictor. It verifies the model digest and exact RIDE feature/normalization schemas.
