@@ -15,3 +15,11 @@ __pycache__
 
 # Deployment overrides
 /front/public/overrides/overrides.json
+
+# Local AI research outputs and runtime state
+/data/
+/ops-intelligence/datasets/
+/ops-intelligence/models/
+/ops-intelligence/data/
+/-l
+/oom
