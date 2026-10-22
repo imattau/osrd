@@ -1,0 +1,35 @@
+# Optional local inference overlay. Ollama runs on an internal-only Podman
+# network; the planner service has no special access to host loopback.
+services:
+  ollama:
+    image: docker.io/ollama/ollama:0.32.9
+    container_name: osrd-ollama
+    environment:
+      OLLAMA_MODELS: /root/.ollama/models
+    volumes:
+      - ${OSRD_OLLAMA_MODELS_DIR:-/usr/share/ollama/.ollama/models}:/root/.ollama/models:ro
+    expose:
+      - "11434"
+    networks:
+      - ai-inference
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
+  ops-intelligence:
+    environment:
+      OSRD_OPS_PLAN_INTENT_ENABLED: "true"
+      OSRD_OPS_PLAN_INTENT_PROVIDER: ollama
+      OSRD_OPS_PLAN_INTENT_MODEL: ${OSRD_OPS_PLAN_INTENT_MODEL:-qwen3:1.7b}
+      OSRD_OPS_OLLAMA_BASE_URL: http://ollama:11434
+    networks:
+      - default
+      - ai-inference
+
+networks:
+  ai-inference:
+    internal: true

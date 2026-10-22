@@ -101,6 +101,12 @@ enum TimetableError {
     #[error("Hourly timetable period is '{timetable_period}' h but should be under 24h")]
     #[editoast_error(status = 422)]
     InvalidPeriod { timetable_period: i64 },
+    #[error("Work-schedule conflict checks are not supported for hourly timetables")]
+    #[editoast_error(status = 422)]
+    WorkSchedulesNotSupportedForHourly,
+    #[error("Work schedule group '{group_id}' could not be found")]
+    #[editoast_error(status = 404)]
+    WorkScheduleGroupNotFound { group_id: i64 },
     #[error("Train schedule '{id}' could not be found")]
     #[editoast_error(status = 404)]
     TrainScheduleNotFound { id: i64 },

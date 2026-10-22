@@ -210,6 +210,9 @@
     "scenarioUpdatedDetails": "Le scénario {{ name }} a bien été mis à jour.",
     "timetable": {
       "addTrainSchedule": "Ajouter un train unique / une mission",
+      "planServiceOptions": "Planifier un service",
+      "planServiceCalendarOnly": "La planification de service nécessite actuellement un horaire calendrier.",
+      "planServiceUnavailable": "La planification de service est indisponible car le service de planification ou le backend OSRD n’est pas prêt.",
       "advancedFilterLabel": "Engin moteur",
       "cancel": "Annuler",
       "choosePath": "Utiliser ce chemin",

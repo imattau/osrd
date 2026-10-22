@@ -10,6 +10,7 @@ import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
+from itertools import combinations
 
 from osrd_ops_intelligence.api.contracts import SnapshotBinding
 
@@ -150,6 +151,252 @@ def generate_departure_shift_candidates(
                 strategy="bounded_departure_shift_v1",
                 edits=edits,
                 total_shift_seconds=sum(edit.shift_seconds for edit in edits),
+            )
+        )
+    return candidates
+
+
+def generate_service_retiming_candidates(
+    *,
+    service_request_id: str,
+    snapshot: SnapshotBinding,
+    schedule_start_times_ms: Mapping[str, int],
+    eligible_schedule_ids: Sequence[str],
+    protected_schedule_ids: Sequence[str],
+    max_edits: int = 12,
+    max_shift_seconds: int,
+    max_shift_seconds_by_schedule: Mapping[str, int] | None = None,
+    max_advance_seconds_by_schedule: Mapping[str, int] | None = None,
+    max_candidates: int,
+    step_seconds: int = 60,
+) -> list[DepartureShiftCandidate]:
+    """Generate bounded positive and negative shifts for explicitly eligible services."""
+    if not service_request_id:
+        raise ValueError("service_request_id is required")
+    if not 0 <= max_edits <= 12:
+        raise ValueError("max_edits must be in [0, 12]")
+    if not 0 <= max_shift_seconds <= 7200:
+        raise ValueError("max_shift_seconds must be in [0, 7200]")
+    if max_candidates < 1 or step_seconds < 1:
+        raise ValueError("max_candidates and step_seconds must be positive")
+    eligible = set(eligible_schedule_ids)
+    protected = set(protected_schedule_ids)
+    unknown = eligible - set(schedule_start_times_ms)
+    if unknown:
+        raise ValueError(f"Eligible schedules are missing from the snapshot: {sorted(unknown)}")
+    unknown_protected = protected - set(schedule_start_times_ms)
+    if unknown_protected:
+        raise ValueError(
+            f"Protected schedules are missing from the snapshot: {sorted(unknown_protected)}"
+        )
+    if eligible & protected:
+        raise ValueError("Protected schedules cannot be retimed")
+    schedule_shift_caps = dict(max_shift_seconds_by_schedule or {})
+    schedule_advance_caps = dict(max_advance_seconds_by_schedule or {})
+    if set(schedule_shift_caps) - eligible:
+        raise ValueError("Per-schedule shift caps may only target eligible services")
+    if set(schedule_advance_caps) - eligible:
+        raise ValueError("Per-schedule advance caps may only target eligible services")
+    if any(not 0 <= maximum <= max_shift_seconds for maximum in schedule_shift_caps.values()):
+        raise ValueError("Per-schedule shift caps must be within the global shift limit")
+    if any(not 0 <= maximum <= max_shift_seconds for maximum in schedule_advance_caps.values()):
+        raise ValueError("Per-schedule advance caps must be within the global shift limit")
+    eligible_ordered = sorted(eligible)
+    magnitudes = (
+        sorted(
+            {
+                min(step_seconds, max_shift_seconds),
+                min(step_seconds * 2, max_shift_seconds),
+                min(step_seconds * 5, max_shift_seconds),
+                max_shift_seconds,
+            }
+        )
+        if max_shift_seconds
+        else []
+    )
+    schedule_magnitudes = {
+        schedule_id: sorted(
+            {
+                min(step_seconds, maximum),
+                min(step_seconds * 2, maximum),
+                min(step_seconds * 5, maximum),
+                maximum,
+            }
+        )
+        if (maximum := schedule_shift_caps.get(schedule_id, max_shift_seconds))
+        else []
+        for schedule_id in eligible_ordered
+    }
+    schedule_advance_magnitudes = {
+        schedule_id: sorted(
+            {
+                min(step_seconds, maximum),
+                min(step_seconds * 2, maximum),
+                min(step_seconds * 5, maximum),
+                maximum,
+            }
+        )
+        if (maximum := schedule_advance_caps.get(schedule_id, max_shift_seconds))
+        else []
+        for schedule_id in eligible_ordered
+    }
+    signed_options_by_schedule = {
+        schedule_id: sorted(
+            {
+                *schedule_magnitudes[schedule_id],
+                *(-magnitude for magnitude in schedule_advance_magnitudes[schedule_id]),
+            }
+        )
+        for schedule_id in eligible_ordered
+    }
+    singles: list[tuple[tuple[str, int], ...]] = []
+    if max_edits >= 1:
+        for schedule_id in eligible_ordered:
+            for shift in signed_options_by_schedule[schedule_id]:
+                singles.append(((schedule_id, shift),))
+    pairwise = (
+        [
+            ((left_id, left_shift), (right_id, right_shift))
+            for left_index, left_id in enumerate(eligible_ordered)
+            for right_id in eligible_ordered[left_index + 1 :]
+            for left_shift in signed_options_by_schedule[left_id]
+            for right_shift in signed_options_by_schedule[right_id]
+        ]
+        if max_edits >= 2
+        else []
+    )
+    coordinated = [
+        tuple(
+            (
+                schedule_id,
+                direction
+                * min(
+                    magnitude,
+                    schedule_advance_caps.get(schedule_id, max_shift_seconds)
+                    if direction < 0
+                    else schedule_shift_caps.get(schedule_id, max_shift_seconds),
+                ),
+            )
+            for schedule_id in group
+        )
+        for edit_count in range(3, min(max_edits, len(eligible_ordered)) + 1)
+        for group in combinations(eligible_ordered, edit_count)
+        for magnitude in magnitudes
+        for direction in (-1, 1)
+        if all(
+            (
+                schedule_advance_caps.get(schedule_id, max_shift_seconds)
+                if direction < 0
+                else schedule_shift_caps.get(schedule_id, max_shift_seconds)
+            )
+            > 0
+            for schedule_id in group
+        )
+    ]
+    mixed_coordinated: list[tuple[tuple[str, int], ...]] = []
+    for edit_count in range(3, min(max_edits, len(eligible_ordered)) + 1):
+        groups = list(combinations(eligible_ordered, edit_count))
+        group_limit = min(4, max_candidates, len(groups))
+        if group_limit == 1:
+            group_indices = [(len(groups) - 1) // 2]
+        else:
+            group_indices = sorted(
+                {
+                    round(index * (len(groups) - 1) / (group_limit - 1))
+                    for index in range(group_limit)
+                }
+            )
+        for group_index in group_indices:
+            group = groups[group_index]
+            sign_patterns: set[tuple[int, ...]] = set()
+            for direction in (-1, 1):
+                sign_patterns.add(
+                    tuple(
+                        direction if index % 2 == 0 else -direction
+                        for index in range(edit_count)
+                    )
+                )
+                for outlier_index in range(edit_count):
+                    sign_patterns.add(
+                        tuple(
+                            direction if index == outlier_index else -direction
+                            for index in range(edit_count)
+                        )
+                    )
+                for split_index in range(1, edit_count):
+                    sign_patterns.add(
+                        tuple(
+                            direction if index < split_index else -direction
+                            for index in range(edit_count)
+                        )
+                    )
+            for signs in sorted(sign_patterns):
+                for magnitude in magnitudes:
+                    proposal = tuple(
+                        (
+                            schedule_id,
+                            sign
+                            * min(
+                                magnitude,
+                                schedule_advance_caps.get(schedule_id, max_shift_seconds)
+                                if sign < 0
+                                else schedule_shift_caps.get(schedule_id, max_shift_seconds),
+                            ),
+                        )
+                        for schedule_id, sign in zip(group, signs, strict=True)
+                    )
+                    if all(shift != 0 for _, shift in proposal):
+                        mixed_coordinated.append(proposal)
+
+    def proposal_key(proposal: tuple[tuple[str, int], ...]) -> tuple[object, ...]:
+        return sum(abs(shift) for _, shift in proposal), proposal
+
+    singles.sort(key=proposal_key)
+    pairwise.sort(key=proposal_key)
+    coordinated.sort(key=proposal_key)
+    mixed_coordinated.sort(key=proposal_key)
+    # Reserve validation budget across singleton, coordinated, pairwise, and
+    # mixed-direction edits. No candidate exceeds max_edits.
+    ordered = [()]
+    seen = {()}
+    for index in range(
+        max(len(singles), len(pairwise), len(coordinated), len(mixed_coordinated))
+    ):
+        for bucket in (singles, coordinated, pairwise, mixed_coordinated):
+            if index < len(bucket) and bucket[index] not in seen:
+                ordered.append(bucket[index])
+                seen.add(bucket[index])
+                if len(ordered) >= max_candidates:
+                    break
+        if len(ordered) >= max_candidates:
+            break
+    candidates: list[DepartureShiftCandidate] = []
+    for proposal in ordered:
+        edits = tuple(
+            DepartureShiftEdit(
+                train_schedule_id=schedule_id,
+                before_start_time_ms=schedule_start_times_ms[schedule_id],
+                after_start_time_ms=schedule_start_times_ms[schedule_id] + shift * 1000,
+                shift_seconds=shift,
+            )
+            for schedule_id, shift in proposal
+        )
+        identity = {
+            "service_request_id": service_request_id,
+            "snapshot": snapshot.model_dump(mode="json"),
+            "edits": [asdict(edit) for edit in edits],
+        }
+        digest = hashlib.sha256(
+            json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()[:16]
+        candidates.append(
+            DepartureShiftCandidate(
+                candidate_id=f"service-plan-{digest}",
+                incident_id=service_request_id,
+                snapshot=snapshot,
+                strategy="service_request_bounded_retiming_v1",
+                edits=edits,
+                total_shift_seconds=sum(abs(edit.shift_seconds) for edit in edits),
             )
         )
     return candidates

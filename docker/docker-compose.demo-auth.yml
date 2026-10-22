@@ -1,0 +1,43 @@
+# Local demo identity for the repository development gateway. This mounts a mock
+# auth provider and is intentionally unsuitable for production use.
+services:
+  # This overlay is a local demo environment. Keep the unauthenticated dev
+  # ports off the host; users enter through the authenticated gateway only.
+  postgres:
+    ports: !override []
+  valkey:
+    ports: !override []
+  openfga:
+    ports: !override []
+  rabbitmq:
+    ports: !override []
+  s3:
+    ports: !override []
+  osrdyne:
+    ports: !override []
+  jaeger:
+    ports: !override []
+  front:
+    ports: !override []
+  ops-intelligence:
+    # Keep the planner API machine-local alongside the passwordless mock auth.
+    ports: !override ["127.0.0.1:8095:8095"]
+  editoast:
+    ports: !override []
+    command: >
+      /bin/sh -c "
+        fga_migrations apply &&
+        diesel migration run --locked-schema &&
+        editoast user add --skip-if-exists 'Example User' 'mock/mocked' &&
+        editoast roles add 'mock/mocked' Admin &&
+        editoast user add --skip-if-exists 'OSRD Demo Planner' 'mock/osrd-demo-planner' &&
+        editoast roles add 'mock/osrd-demo-planner' Admin &&
+        exec editoast runserver"
+  gateway:
+    depends_on:
+      ops-intelligence: { condition: service_healthy }
+    # The no-password mock Admin identity is strictly local development auth.
+    # Override the base gateway's all-interface publication for this overlay.
+    ports: !override ["127.0.0.1:4000:4000"]
+    volumes:
+      - "./docker/gateway.demo.toml:/srv/gateway.toml:ro"

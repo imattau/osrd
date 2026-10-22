@@ -18,8 +18,12 @@ from osrd_ops_intelligence.training.ride_training_data import (
 FILES = {
     "gnn/feature_spec.yaml": "28f636af3bf5ebac9df7190648b57d42bea795558a4842985e5f95fda9f8f9e3",
     "gnn/normalization.yaml": "8ebc3a30585ab2f4dd0f83eb0505375cf8d8aaf7d52694bd2f7bbaecc756fcfb",
-    "gnn/train/graphs_part_00000.pt": "df9fef3fc0c72a47e6fea534afd51e2c959864a53de737f43f1d08e25a81a0ef",
-    "gnn/train/graphs_part_00001.pt": "930cb01e2c0bc9b6da568b9f75b72791487992520976413aa4392459dbd9f1bc",
+    "gnn/train/graphs_part_00000.pt": (
+        "df9fef3fc0c72a47e6fea534afd51e2c959864a53de737f43f1d08e25a81a0ef"
+    ),
+    "gnn/train/graphs_part_00001.pt": (
+        "930cb01e2c0bc9b6da568b9f75b72791487992520976413aa4392459dbd9f1bc"
+    ),
 }
 
 

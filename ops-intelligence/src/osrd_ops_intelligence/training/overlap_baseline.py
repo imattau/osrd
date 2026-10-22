@@ -29,7 +29,14 @@ def load_episodes(data_dirs: list[Path]) -> tuple[list[dict[str, Any]], list[dic
                 "parameters": manifest.get("parameters", {}),
             }
         )
-        for line in content.decode("utf-8").splitlines():
+        records = [line for line in content.decode("utf-8").splitlines() if line.strip()]
+        declared_count = manifest.get("episode_count")
+        if declared_count is not None and int(declared_count) != len(records):
+            raise ValueError(
+                f"Episode count mismatch in {episode_path}: "
+                f"manifest says {declared_count}, file contains {len(records)}"
+            )
+        for line in records:
             episode = json.loads(line)
             episode_id = episode["episode_id"]
             if episode_id in seen:
@@ -44,14 +51,12 @@ def rows_for_episode(episode: dict[str, Any]) -> list[dict[str, Any]]:
     payloads = episode["inputs"]["schedule_payloads"]
     if len(schedule_ids) != len(payloads):
         raise ValueError(f"Episode {episode['episode_id']} has mismatched schedule ids and inputs")
-    starts = [payload["start_time"] / 1000 for payload in payloads]
-    conflicts = episode["outputs"].get("conflicts", [])
-    involved = {
-        train_id["train_schedule_id"]
-        for conflict in conflicts
-        for train_id in conflict.get("train_ids", [])
-        if "train_schedule_id" in train_id
+    paired_labels = {
+        int(row["train_index"]): row for row in episode["labels"]["paired_by_train_index"]
     }
+    if len(paired_labels) != len(schedule_ids):
+        raise ValueError(f"Episode {episode['episode_id']} has mismatched paired labels")
+    starts = [payload["start_time"] / 1000 for payload in payloads]
     summaries = episode["outputs"].get("simulation_summaries", {})
     rows: list[dict[str, Any]] = []
     for index, schedule_id in enumerate(schedule_ids):
@@ -63,7 +68,7 @@ def rows_for_episode(episode: dict[str, Any]) -> list[dict[str, Any]]:
                 "episode_id": episode["episode_id"],
                 "nearest_departure_gap_s": nearest_gap,
                 "travel_time_s": (summary.get("time") or 0) / 1000,
-                "label": int(schedule_id in involved),
+                "label": int(bool(paired_labels[index]["new_conflict"])),
             }
         )
     return rows
@@ -107,7 +112,9 @@ def regression_metrics(actual: list[float], predicted: list[float]) -> dict[str,
 
 
 def split_by_scenario_group(
-    episodes: list[dict[str, Any]], test_fraction: float
+    episodes: list[dict[str, Any]],
+    test_fraction: float,
+    test_scenario_groups: list[str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
     group_for_episode = {
         episode["episode_id"]: episode.get("scenario_group", episode["episode_id"])
@@ -116,12 +123,22 @@ def split_by_scenario_group(
     groups = sorted(set(group_for_episode.values()))
     if len(groups) < 2:
         raise ValueError("Need at least two scenario groups for a scenario-held-out evaluation")
-    test_group_count = max(1, min(len(groups) - 1, round(len(groups) * test_fraction)))
-    test_groups = set(
-        sorted(groups, key=lambda group: hashlib.sha256(group.encode()).hexdigest())[
-            :test_group_count
-        ]
-    )
+    if test_scenario_groups:
+        unknown_groups = sorted(set(test_scenario_groups) - set(groups))
+        if unknown_groups:
+            raise ValueError(f"Unknown test scenario groups: {', '.join(unknown_groups)}")
+        test_groups = set(test_scenario_groups)
+        if len(test_groups) == len(groups):
+            raise ValueError("At least one scenario group must remain for training")
+        split_method = "explicit scenario groups held out"
+    else:
+        test_group_count = max(1, min(len(groups) - 1, round(len(groups) * test_fraction)))
+        test_groups = set(
+            sorted(groups, key=lambda group: hashlib.sha256(group.encode()).hexdigest())[
+                :test_group_count
+            ]
+        )
+        split_method = "stable hash assignment by scenario_group; entire groups held out"
     train_episodes = [
         episode
         for episode in episodes
@@ -133,7 +150,7 @@ def split_by_scenario_group(
     if not train_episodes or not test_episodes:
         raise ValueError("Episode split produced an empty train or test partition")
     split = {
-        "method": "stable hash assignment by scenario_group; entire groups held out",
+        "method": split_method,
         "test_fraction_target": test_fraction,
         "scenario_group_count": len(groups),
         "train_scenario_groups": sorted(
@@ -148,9 +165,15 @@ def split_by_scenario_group(
     return train_episodes, test_episodes, split
 
 
-def evaluate(data_dirs: list[Path], test_fraction: float) -> dict[str, Any]:
+def evaluate(
+    data_dirs: list[Path],
+    test_fraction: float,
+    test_scenario_groups: list[str] | None = None,
+) -> dict[str, Any]:
     episodes, sources = load_episodes(data_dirs)
-    train_episodes, test_episodes, split = split_by_scenario_group(episodes, test_fraction)
+    train_episodes, test_episodes, split = split_by_scenario_group(
+        episodes, test_fraction, test_scenario_groups
+    )
     train = [row for episode in train_episodes for row in rows_for_episode(episode)]
     test = [row for episode in test_episodes for row in rows_for_episode(episode)]
     candidates = sorted({0.0, *(row["nearest_departure_gap_s"] for row in train)})
@@ -233,11 +256,16 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("data_dirs", nargs="+", type=Path)
     parser.add_argument("--test-fraction", type=float, default=0.2)
+    parser.add_argument(
+        "--test-scenario-groups",
+        nargs="+",
+        help="Explicit scenario groups to hold out (overrides hash-based test fraction).",
+    )
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     if not 0.05 <= args.test_fraction <= 0.5:
         parser.error("test-fraction must be between 0.05 and 0.5")
-    report = evaluate(args.data_dirs, args.test_fraction)
+    report = evaluate(args.data_dirs, args.test_fraction, args.test_scenario_groups)
     rendered = json.dumps(report, indent=2, sort_keys=True) + "\n"
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)

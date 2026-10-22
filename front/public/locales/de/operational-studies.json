@@ -206,6 +206,9 @@
     "scenarioUpdatedDetails": "Szenario {{ name }} wurde geändert.",
     "timetable": {
       "addTrainSchedule": "Zug / Leistung hinzufügen",
+      "planServiceOptions": "Dienst planen",
+      "planServiceCalendarOnly": "Die Dienstplanung erfordert derzeit einen Kalenderfahrplan.",
+      "planServiceUnavailable": "Die Dienstplanung ist nicht verfügbar, weil der Planungsdienst oder das OSRD-Backend nicht bereit ist.",
       "advancedFilterLabel": "Schienenfahrzeug",
       "cancel": "Abbrechen",
       "choosePath": "Diesen Pfad wählen",

@@ -1,4 +1,4 @@
-"""Append-only SQLite journal for completed advisory planning requests."""
+"""Append-only SQLite journal for plans and explicitly submitted reviews."""
 
 from __future__ import annotations
 
@@ -14,6 +14,8 @@ from osrd_ops_intelligence.api.contracts import (
     PlanAuditRecord,
     PlanningRequest,
     PlanningResponse,
+    ServicePlanReviewReceipt,
+    ServicePlanReviewSubmission,
 )
 
 
@@ -34,7 +36,7 @@ def _digest(value: str) -> str:
 
 
 class PlanAuditStore:
-    """Store complete request/result pairs once, keyed by the client request ID.
+    """Store immutable plan results and explicitly submitted service-plan reviews.
 
     Update and delete triggers make records immutable through this service's SQLite
     connection. Production deployments should place this journal on a durable volume
@@ -57,13 +59,32 @@ class PlanAuditStore:
                         result_json TEXT NOT NULL
                     )"""
                 )
+                connection.execute(
+                    """CREATE TABLE IF NOT EXISTS service_plan_reviews (
+                        review_id TEXT PRIMARY KEY,
+                        request_id TEXT NOT NULL,
+                        created_at TEXT NOT NULL,
+                        review_sha256 TEXT NOT NULL,
+                        record_json TEXT NOT NULL
+                    )"""
+                )
+                connection.execute(
+                    """CREATE UNIQUE INDEX IF NOT EXISTS service_plan_reviews_request_id
+                       ON service_plan_reviews (request_id)"""
+                )
                 connection.executescript(
                     """CREATE TRIGGER IF NOT EXISTS plan_records_no_update
                        BEFORE UPDATE ON plan_records
                        BEGIN SELECT RAISE(ABORT, 'plan records are immutable'); END;
                        CREATE TRIGGER IF NOT EXISTS plan_records_no_delete
                        BEFORE DELETE ON plan_records
-                       BEGIN SELECT RAISE(ABORT, 'plan records are immutable'); END;"""
+                       BEGIN SELECT RAISE(ABORT, 'plan records are immutable'); END;
+                       CREATE TRIGGER IF NOT EXISTS service_plan_reviews_no_update
+                       BEFORE UPDATE ON service_plan_reviews
+                       BEGIN SELECT RAISE(ABORT, 'service plan reviews are immutable'); END;
+                       CREATE TRIGGER IF NOT EXISTS service_plan_reviews_no_delete
+                       BEFORE DELETE ON service_plan_reviews
+                       BEGIN SELECT RAISE(ABORT, 'service plan reviews are immutable'); END;"""
                 )
         except sqlite3.Error as error:
             raise AuditStoreError(
@@ -143,3 +164,54 @@ class PlanAuditStore:
         if record is None:
             raise AuditStoreError("Planning record was not readable after persistence")
         return record
+
+    def record_service_plan_review(
+        self, submission: ServicePlanReviewSubmission
+    ) -> ServicePlanReviewReceipt:
+        record_json = _canonical_json(submission.record)
+        review_sha256 = _digest(record_json)
+        nested_request = submission.record["request"]
+        service_request = nested_request.get("service") or nested_request.get("hourly_service")
+        if not isinstance(service_request, dict):
+            raise AuditStoreError("Validated service-plan review has no timetable request")
+        request_id = UUID(service_request["request_id"])
+        created_at = datetime.now(UTC).isoformat()
+        try:
+            with sqlite3.connect(self.path, timeout=30) as connection:
+                connection.execute(
+                    """INSERT INTO service_plan_reviews (
+                        review_id, request_id, created_at, review_sha256, record_json
+                    ) VALUES (?, ?, ?, ?, ?)""",
+                    (
+                        str(submission.review_id),
+                        str(request_id),
+                        created_at,
+                        review_sha256,
+                        record_json,
+                    ),
+                )
+        except sqlite3.IntegrityError:
+            try:
+                with sqlite3.connect(self.path, timeout=30) as connection:
+                    row = connection.execute(
+                        """SELECT request_id, created_at, review_sha256, record_json
+                           FROM service_plan_reviews WHERE review_id = ?""",
+                        (str(submission.review_id),),
+                    ).fetchone()
+            except sqlite3.Error as error:
+                raise AuditStoreError(
+                    f"Could not read saved service-plan review: {error}"
+                ) from error
+            if row is None or row[0] != str(request_id) or row[3] != record_json:
+                raise AuditConflict(
+                    "request or review ID already identifies a different planner review"
+                ) from None
+            created_at, review_sha256 = row[1], row[2]
+        except sqlite3.Error as error:
+            raise AuditStoreError(f"Could not persist service-plan review: {error}") from error
+        return ServicePlanReviewReceipt(
+            review_id=submission.review_id,
+            request_id=request_id,
+            created_at=created_at,
+            review_sha256=review_sha256,
+        )

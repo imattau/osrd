@@ -1,0 +1,6 @@
+services:
+  ops-intelligence:
+    environment:
+      OSRD_OPS_BLIND_REVIEW_MODE: "true"
+      OSRD_OPS_INSERTION_MODEL: ""
+      OSRD_OPS_REVIEW_INFRASTRUCTURE_GROUP: ${OSRD_OPS_REVIEW_INFRASTRUCTURE_GROUP:?Set the stable study label for this physical infrastructure}

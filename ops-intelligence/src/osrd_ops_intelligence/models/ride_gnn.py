@@ -7,7 +7,6 @@ from torch import Tensor, nn
 from torch_geometric.data import HeteroData
 from torch_geometric.nn import GATv2Conv, HeteroConv
 
-
 RIDE_EDGE_DIMS = {
     ("station", "to", "station"): 9,
     ("station", "to_rev", "station"): 9,
@@ -97,12 +96,8 @@ class RideHeterogeneousGNN(nn.Module):
             node_type: self.node_encoders[f"{node_type}_encoder"](graph[node_type].x)
             for node_type in ("train", "station")
         }
-        edge_index_dict = {
-            edge_type: graph[edge_type].edge_index for edge_type in RIDE_EDGE_DIMS
-        }
-        edge_attr_dict = {
-            edge_type: graph[edge_type].edge_attr for edge_type in RIDE_EDGE_DIMS
-        }
+        edge_index_dict = {edge_type: graph[edge_type].edge_index for edge_type in RIDE_EDGE_DIMS}
+        edge_attr_dict = {edge_type: graph[edge_type].edge_attr for edge_type in RIDE_EDGE_DIMS}
 
         for convolution, norms in zip(self.convolutions, self.norms, strict=True):
             messages = convolution(x_dict, edge_index_dict, edge_attr_dict)

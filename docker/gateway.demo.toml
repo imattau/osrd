@@ -1,0 +1,37 @@
+# Local-only demo authentication. The mock provider has no password and must not be
+# used for a public or production deployment.
+secret_key = "nVKMA9XLeQ41sGp4r/Psq/obwKO76icUkDYeOJv7KbWr3d5Mxbdd/BVui7osBfEn3L0sSpIBBiIY668MdN1tDQ=="
+
+listen_addr = "0.0.0.0"
+allowed_origins = ["http://127.0.0.1:3000", "http://localhost:3000"]
+
+[telemetry.tracing]
+type = "Otlp"
+endpoint = "http://osrd-jaeger:4317"
+
+[[targets]]
+tracing_name = "editoast"
+prefix = "/api"
+upstream = "http://osrd-editoast:80"
+require_auth = true
+
+[[targets]]
+tracing_name = "ops-intelligence"
+prefix = "/ops-intelligence"
+upstream = "http://ops-intelligence:8095"
+require_auth = true
+
+[[targets]]
+tracing_name = "front"
+upstream = "http://osrd-front:3000"
+require_auth = false
+
+[auth]
+default_provider = "mock"
+secure_cookies = false
+
+[[auth.providers]]
+type = "Mocked"
+provider_id = "mock"
+username = "OSRD Demo Planner"
+user_id = "osrd-demo-planner"

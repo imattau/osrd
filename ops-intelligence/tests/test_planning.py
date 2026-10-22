@@ -7,7 +7,11 @@ from typing import Any
 import pytest
 
 from osrd_ops_intelligence.api.contracts import PlanningRequest
-from osrd_ops_intelligence.service.osrd_client import CandidateValidation, SnapshotRef
+from osrd_ops_intelligence.service.osrd_client import (
+    CandidateValidation,
+    ScheduleMetadata,
+    SnapshotRef,
+)
 from osrd_ops_intelligence.service.planning import PlanningInputError, plan
 
 
@@ -20,6 +24,12 @@ class StubOSRDClient:
 
     async def get_schedule_start_times(self, *, snapshot: SnapshotRef) -> dict[str, int]:
         return {"101": 1_000, "202": 2_000}
+
+    async def get_schedule_metadata(self, *, snapshot: SnapshotRef) -> ScheduleMetadata:
+        return ScheduleMetadata(
+            start_times_ms={"101": 1_000, "202": 2_000},
+            train_names={"101": "Northbound service", "202": "Southbound service"},
+        )
 
     async def validate_candidate(
         self, *, snapshot: SnapshotRef, candidate_payload: dict[str, object]

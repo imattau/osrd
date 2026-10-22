@@ -3,3 +3,7 @@ __pycache__
 .ruff_cache
 .pytest_cache
 *.py[cod]
+data/
+datasets/
+models/
+artifacts/

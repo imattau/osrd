@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import gc
-import hashlib
 import json
 import os
 import random
@@ -19,7 +18,6 @@ from torch_geometric.data import Batch, HeteroData
 from osrd_ops_intelligence.models.ride_gnn import RideHeterogeneousGNN
 from osrd_ops_intelligence.training.ride_gnn_data import FILES
 from osrd_ops_intelligence.training.ride_training_data import _hash_file
-
 
 DEFAULT_DATA = Path("data/rail/ride-gold-lite-gnn-training/gnn/train")
 DEFAULT_SHARDS = ("graphs_part_00000.pt", "graphs_part_00001.pt")
@@ -44,7 +42,9 @@ def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
     os.replace(temporary, path)
 
 
-def _cache_manifest_is_usable(path: Path, source_hashes: dict[str, str], chunk_size: int, limit: int | None) -> bool:
+def _cache_manifest_is_usable(
+    path: Path, source_hashes: dict[str, str], chunk_size: int, limit: int | None
+) -> bool:
     try:
         manifest = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
@@ -165,7 +165,9 @@ def _save_resume(
     temporary = path.with_suffix(path.suffix + ".tmp")
     torch.save(
         {
-            "state_dict": {name: value.detach().cpu() for name, value in model.state_dict().items()},
+            "state_dict": {
+                name: value.detach().cpu() for name, value in model.state_dict().items()
+            },
             "optimizer": optimizer.state_dict(),
             **progress,
         },
@@ -192,7 +194,9 @@ def _score_chunks(
             graphs = _load_graph_file(cache_dir / chunk["file"])
             selected = [graph for graph in graphs if _snapshot_day(graph) in date_group]
             for start in range(0, len(selected), batch_size):
-                abs_sum, sq_sum, n = _step(model, selected[start : start + batch_size], None, device)
+                abs_sum, sq_sum, n = _step(
+                    model, selected[start : start + batch_size], None, device
+                )
                 absolute += float(abs_sum)
                 squared += float(sq_sum)
                 count += n
@@ -201,7 +205,11 @@ def _score_chunks(
                 gc.collect()
     if count == 0:
         raise ValueError("Validation date group contains no targets")
-    return {"mae_seconds": absolute / count, "rmse_seconds": (squared / count) ** 0.5, "targets": float(count)}
+    return {
+        "mae_seconds": absolute / count,
+        "rmse_seconds": (squared / count) ** 0.5,
+        "targets": float(count),
+    }
 
 
 def train(args: argparse.Namespace) -> dict[str, Any]:
@@ -209,18 +217,29 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
     missing = [str(path) for path in shards if not path.is_file()]
     if missing:
         raise FileNotFoundError("Missing pinned training shard(s): " + ", ".join(missing))
-    cache_dir = args.cache_dir or args.data_dir.parent / f"chunks-{args.chunk_size}-{args.max_graphs or 'all'}"
+    cache_dir = (
+        args.cache_dir
+        or args.data_dir.parent / f"chunks-{args.chunk_size}-{args.max_graphs or 'all'}"
+    )
     manifest = _prepare_chunks(shards, cache_dir, args.chunk_size, args.max_graphs)
     chunks = manifest["chunks"]
     train_dates, validation_dates = _date_split(chunks)
-    train_chunk_ids = [i for i, chunk in enumerate(chunks) if any(day in train_dates for day in chunk["snapshot_days"])]
+    train_chunk_ids = [
+        i
+        for i, chunk in enumerate(chunks)
+        if any(day in train_dates for day in chunk["snapshot_days"])
+    ]
 
     torch.manual_seed(args.seed)
     random.seed(args.seed)
     device = torch.device(args.device)
     if device.type == "cuda" and not torch.cuda.is_available():
-        raise ValueError("CUDA was requested, but this PyTorch installation has no available CUDA device")
-    model = RideHeterogeneousGNN(hidden_channels=args.hidden_channels, layers=args.layers).to(device)
+        raise ValueError(
+            "CUDA was requested, but this PyTorch installation has no available CUDA device"
+        )
+    model = RideHeterogeneousGNN(hidden_channels=args.hidden_channels, layers=args.layers).to(
+        device
+    )
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=1e-4)
     last_path = args.output.with_suffix(".last.pt")
     best_validation = float("inf")
@@ -301,7 +320,10 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
                                 "global_step": global_step,
                             },
                         )
-                        print(f"  saved recovery checkpoint at optimizer step {global_step}", flush=True)
+                        print(
+                            f"  saved recovery checkpoint at optimizer step {global_step}",
+                            flush=True,
+                        )
             del selected, graphs
             gc.collect()
             offset = 0
@@ -324,7 +346,9 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
                     },
                 )
 
-        validation = _score_chunks(model, chunks, validation_dates, cache_dir, args.batch_size, device)
+        validation = _score_chunks(
+            model, chunks, validation_dates, cache_dir, args.batch_size, device
+        )
         row = {"epoch": epoch, "validation": validation}
         history.append(row)
         print(json.dumps(row, sort_keys=True), flush=True)
@@ -338,8 +362,17 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             best_temporary = args.output.with_suffix(args.output.suffix + ".tmp")
             torch.save(
                 {
-                    "state_dict": {name: value.detach().cpu() for name, value in model.state_dict().items()},
-                    "config": {"train_features": 32, "station_features": 17, "hidden_channels": args.hidden_channels, "layers": args.layers, "heads": 4, "dropout": 0.15},
+                    "state_dict": {
+                        name: value.detach().cpu() for name, value in model.state_dict().items()
+                    },
+                    "config": {
+                        "train_features": 32,
+                        "station_features": 17,
+                        "hidden_channels": args.hidden_channels,
+                        "layers": args.layers,
+                        "heads": 4,
+                        "dropout": 0.15,
+                    },
                     "dataset_revision": REVISION,
                     "target_mean": TARGET_MEAN,
                     "target_std": TARGET_STD,
@@ -405,7 +438,9 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=17)
     parser.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
     parser.add_argument("--max-graphs", type=int, default=None)
-    parser.add_argument("--resume", action="store_true", help="Resume from artifacts/ride-gnn.last.pt")
+    parser.add_argument(
+        "--resume", action="store_true", help="Resume from artifacts/ride-gnn.last.pt"
+    )
     args = parser.parse_args()
     report = train(args)
     print(json.dumps(report, indent=2, sort_keys=True))

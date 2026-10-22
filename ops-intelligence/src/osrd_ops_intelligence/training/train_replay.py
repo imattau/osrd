@@ -41,9 +41,15 @@ def tune_probability_threshold(labels: list[int], probabilities: list[float]) ->
     )
 
 
-def train(data_dirs: list[Path], test_fraction: float) -> tuple[dict[str, Any], dict[str, Any]]:
+def train(
+    data_dirs: list[Path],
+    test_fraction: float,
+    test_scenario_groups: list[str] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
     episodes, sources = load_episodes(data_dirs)
-    train_episodes, test_episodes, split = split_by_scenario_group(episodes, test_fraction)
+    train_episodes, test_episodes, split = split_by_scenario_group(
+        episodes, test_fraction, test_scenario_groups
+    )
     train_rows = flatten(train_episodes)
     test_rows = flatten(test_episodes)
     train_features = [
@@ -56,7 +62,7 @@ def train(data_dirs: list[Path], test_fraction: float) -> tuple[dict[str, Any], 
     train_probabilities = [predict_probability(classifier, row) for row in train_features]
     test_probabilities = [predict_probability(classifier, row) for row in test_features]
     threshold = tune_probability_threshold(train_labels, train_probabilities)
-    overlap_report = evaluate_overlap_baseline(data_dirs, test_fraction)
+    overlap_report = evaluate_overlap_baseline(data_dirs, test_fraction, test_scenario_groups)
 
     delay_train = [row for row in train_rows if row["arrival_delta_ms"] is not None]
     delay_test = [row for row in test_rows if row["arrival_delta_ms"] is not None]
@@ -95,7 +101,7 @@ def train(data_dirs: list[Path], test_fraction: float) -> tuple[dict[str, Any], 
         "feature_schema": FEATURE_SCHEMA,
         "source_runs": sources,
         "split": split,
-        "conflict_target": "train schedule involved in a treatment-arm OSRD conflict",
+        "conflict_target": "train newly conflict-involved in treatment relative to paired baseline",
         "conflict_classifier": {
             "threshold": threshold,
             "train_metrics": metrics(
@@ -130,7 +136,10 @@ def train(data_dirs: list[Path], test_fraction: float) -> tuple[dict[str, Any], 
         },
         "limitations": [
             "Synthetic scenarios only; these metrics do not estimate field performance.",
-            "Two groups provide one held-out split and weak uncertainty estimates.",
+            (
+                "Only a few scenario groups are available; one held-out split gives weak "
+                "uncertainty estimates."
+            ),
             "Feature inputs assume a paired baseline simulation is available before scoring.",
             "The model is an offline benchmark and is not approved for operational decisions.",
         ],
@@ -142,11 +151,16 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("data_dirs", nargs="+", type=Path)
     parser.add_argument("--test-fraction", type=float, default=0.2)
+    parser.add_argument(
+        "--test-scenario-groups",
+        nargs="+",
+        help="Explicit scenario groups to hold out (overrides hash-based test fraction).",
+    )
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args()
     if not 0.05 <= args.test_fraction <= 0.5:
         parser.error("test-fraction must be between 0.05 and 0.5")
-    model, report = train(args.data_dirs, args.test_fraction)
+    model, report = train(args.data_dirs, args.test_fraction, args.test_scenario_groups)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     (args.output_dir / "model.json").write_text(
         json.dumps(model, indent=2, sort_keys=True) + "\n", encoding="utf-8"

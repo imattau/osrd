@@ -36,6 +36,20 @@ osrd-ops-api = "osrd_ops_intelligence.service.app:run"
 osrd-replay-collect = "osrd_ops_intelligence.training.replay:main"
 osrd-overlap-baseline = "osrd_ops_intelligence.training.overlap_baseline:main"
 osrd-replay-train = "osrd_ops_intelligence.training.train_replay:main"
+osrd-replay-gnn-train = "osrd_ops_intelligence.training.train_replay_gnn:main"
+osrd-replay-gnn-train-corpus = "osrd_ops_intelligence.training.train_replay_gnn_corpus:main"
+osrd-replay-plan-gnn-train = "osrd_ops_intelligence.training.train_replay_plan_gnn:main"
+osrd-replay-plan-gnn-predict = "osrd_ops_intelligence.training.predict_replay_plan_gnn:main"
+osrd-replay-plan-gnn-generalization-eval = "osrd_ops_intelligence.training.evaluate_plan_ranker_generalization:main"
+osrd-replay-gnn-extend = "osrd_ops_intelligence.training.train_replay_gnn_extension:main"
+osrd-replay-gnn-predict = "osrd_ops_intelligence.training.predict_replay_gnn:main"
+osrd-replay-route-choice-eval = "osrd_ops_intelligence.training.evaluate_route_choice:main"
+osrd-replay-phase-choice-eval = "osrd_ops_intelligence.training.evaluate_phase_choice:main"
+osrd-replay-frequency-choice-eval = "osrd_ops_intelligence.training.evaluate_frequency_choice:main"
+osrd-replay-frequency-grid-eval = "osrd_ops_intelligence.training.evaluate_frequency_grid:main"
+osrd-replay-phase-grid-eval = "osrd_ops_intelligence.training.evaluate_phase_grid:main"
+osrd-replay-coupled-plan-eval = "osrd_ops_intelligence.training.evaluate_coupled_plan:main"
+osrd-swiss-actual-profile = "osrd_ops_intelligence.training.swiss_actual_data:main"
 osrd-ride-fetch-core = "osrd_ops_intelligence.training.ride_core:main"
 osrd-ride-fetch-training = "osrd_ops_intelligence.training.ride_training_data:main"
 osrd-ride-fetch-gnn-training = "osrd_ops_intelligence.training.ride_gnn_data:main"
@@ -46,8 +60,15 @@ osrd-ride-calibrate = "osrd_ops_intelligence.models.calibration:main"
 osrd-ride-synthetic-smoke = "osrd_ops_intelligence.training.synthetic_ride_smoke:main"
 osrd-ride-gbdt = "osrd_ops_intelligence.training.ride_gbdt_baseline:main"
 osrd-ride-baseline = "osrd_ops_intelligence.training.ride_baseline:main"
+osrd-infrabel-data = "osrd_ops_intelligence.training.infrabel_data:main"
+osrd-osm-railjson-normalize = "osrd_ops_intelligence.training.osm_railjson:main"
+osrd-osm-railjson-crop = "osrd_ops_intelligence.training.crop_osm_railjson:main"
+osrd-osm-replay-cohort = "osrd_ops_intelligence.training.osm_replay_cohort:main"
 osrd-plan-ranker-data = "osrd_ops_intelligence.training.plan_ranker_data:main"
 osrd-plan-ranker-train = "osrd_ops_intelligence.training.train_plan_ranker:main"
+osrd-service-plan-review-data = "osrd_ops_intelligence.training.service_plan_preferences:main"
+osrd-service-plan-preference-train = "osrd_ops_intelligence.training.train_service_plan_preferences:main"
+osrd-service-plan-preference-freeze-split = "osrd_ops_intelligence.training.train_service_plan_preferences:freeze_main"
 
 [build-system]
 requires = ["hatchling>=1.26,<2"]
@@ -55,6 +76,7 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/osrd_ops_intelligence"]
+include = ["src/osrd_ops_intelligence/**/*.html", "src/osrd_ops_intelligence/service/locales/*.json"]
 
 [tool.ruff]
 line-length = 100

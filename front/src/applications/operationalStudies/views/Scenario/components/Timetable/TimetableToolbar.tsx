@@ -1,4 +1,4 @@
-import { useContext, useMemo, useState } from 'react';
+import { useContext, useEffect, useMemo, useState } from 'react';
 
 import {
   Alert,
@@ -29,6 +29,7 @@ import UploadFileModal from 'common/uploadFileModal';
 import type { TrainScheduleWithDetails } from 'modules/trainSchedule/types';
 import { setFailure } from 'reducers/main';
 import { useAppDispatch } from 'store';
+import { Duration } from 'utils/duration';
 import { castErrorToFailure } from 'utils/error';
 
 import useImportTrainSchedules from '../ImportTrainSchedule';
@@ -72,11 +73,71 @@ const TimetableToolbar = ({
   timetableMode,
   setTimetableMode,
 }: TimetableToolbarProps) => {
-  const { t } = useTranslation(['operational-studies', 'translation'], { keyPrefix: 'main' });
+  const { t, i18n } = useTranslation(['operational-studies', 'translation'], { keyPrefix: 'main' });
   const dispatch = useAppDispatch();
 
-  const { infraId, timetableId } = useScenarioContext();
+  const { infraId, timetableId, scenario } = useScenarioContext();
   const { trainSchedules } = useTimetableContext();
+  const [plannerAvailable, setPlannerAvailable] = useState(false);
+  useEffect(() => {
+    let active = true;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    let controller: AbortController | undefined;
+    const checkPlannerAvailability = async () => {
+      controller = new AbortController();
+      const requestTimeout = setTimeout(() => controller?.abort(), 5_000);
+      try {
+        const response = await fetch('/ops-intelligence/readyz', { signal: controller.signal });
+        const readiness = response.ok ? await response.json() : undefined;
+        if (active) {
+          setPlannerAvailable(
+            readiness?.status === 'ready' && readiness?.planning_configured === true
+          );
+        }
+      } catch {
+        if (active) setPlannerAvailable(false);
+      } finally {
+        clearTimeout(requestTimeout);
+        if (active) timeout = setTimeout(checkPlannerAvailability, 15_000);
+      }
+    };
+    void checkPlannerAvailability();
+    return () => {
+      active = false;
+      controller?.abort();
+      if (timeout) clearTimeout(timeout);
+    };
+  }, []);
+  const selectedSchedule =
+    selectedTrainScheduleIds.length === 1
+      ? trainSchedules.get(selectedTrainScheduleIds[0])
+      : undefined;
+  const pathTemplate = selectedSchedule?.path.map(({ key, location }) => {
+    const stopFor = selectedSchedule.schedule?.find((item) => item.at === key)?.stop_for;
+    return {
+      key,
+      location,
+      ...(stopFor ? { stop_for_seconds: Math.round(Duration.parse(stopFor).total('second')) } : {}),
+    };
+  });
+  const plannerParams = new URLSearchParams({
+    infra: String(infraId),
+    timetable: String(timetableId),
+    scenario: String(scenario.id),
+    lang: i18n.resolvedLanguage || i18n.language || 'en',
+    'timetable-type': scenario.timetable_type,
+    ...(selectedTrainScheduleIds.length
+      ? { 'eligible-schedule-ids': selectedTrainScheduleIds.join(',') }
+      : {}),
+    ...(selectedSchedule
+      ? {
+          name: selectedSchedule.train_name,
+          'rolling-stock': selectedSchedule.rolling_stock_name,
+        }
+      : {}),
+    ...(pathTemplate ? { path: JSON.stringify(pathTemplate) } : {}),
+  });
+  const plannerUrl = `/ops-intelligence/planner?${plannerParams}`;
 
   const { data: trainScheduleRoundTripsData } =
     osrdEditoastApi.endpoints.getTimetableByIdRoundTrips.useQuery({
@@ -235,6 +296,32 @@ const TimetableToolbar = ({
           >
             <Plus />
           </button>
+          {plannerAvailable && (
+            <a
+              className="add-button"
+              data-testid="scenarios-plan-service-button"
+              title={t('timetable.planServiceOptions')}
+              aria-label={t('timetable.planServiceOptions')}
+              href={plannerUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              <File />
+            </a>
+          )}
+          {!plannerAvailable && (
+            <button
+              className="add-button"
+              data-testid="scenarios-plan-service-button"
+              title={t('timetable.planServiceUnavailable')}
+              aria-label={t('timetable.planServiceUnavailable')}
+              aria-disabled="true"
+              disabled
+              type="button"
+            >
+              <File />
+            </button>
+          )}
         </div>
         <div className="right-group">
           <button

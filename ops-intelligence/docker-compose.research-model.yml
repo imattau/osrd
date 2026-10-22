@@ -1,0 +1,11 @@
+# Optional research-only overlay. Requires the local v3 model artifact and
+# OSRD_OPS_INSTALL_GNN=true when building the service.
+services:
+  ops-intelligence:
+    build:
+      args:
+        INSTALL_GNN: "true"
+    environment:
+      OSRD_OPS_INSERTION_MODEL: /models/service-insertion/model.pt
+    volumes:
+      - ./ops-intelligence/models/trained/service-insertion-v3/model.pt:/models/service-insertion/model.pt:ro

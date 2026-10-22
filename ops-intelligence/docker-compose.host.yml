@@ -1,0 +1,8 @@
+# Add after docker/docker-compose.host.yml when running the planner in the
+# repository's host-network development stack.
+services:
+  ops-intelligence:
+    network_mode: host
+    ports: !reset []
+    environment:
+      OSRD_EDITOAST_URL: ${OSRD_EDITOAST_URL:-http://localhost:4000/api}

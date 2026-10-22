@@ -210,6 +210,9 @@
     "scenarioUpdatedDetails": "Scenario {{ name }} has been updated.",
     "timetable": {
       "addTrainSchedule": "Add a unique train / service",
+      "planServiceOptions": "Plan service options",
+      "planServiceCalendarOnly": "Service planning currently requires a calendar timetable.",
+      "planServiceUnavailable": "Service planning is unavailable because the planning service or OSRD backend is not ready.",
       "advancedFilterLabel": "Rolling stock",
       "cancel": "Cancel",
       "choosePath": "Use this path",

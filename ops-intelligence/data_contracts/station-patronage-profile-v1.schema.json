@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://osrd.example/schemas/station-patronage-profile-v1.schema.json",
+  "title": "OSRD station patronage profile v1",
+  "description": "Aggregated, time-bucketed station boardings and alightings with explicit provenance and OSRD operational-point identity.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "dataset_id", "infra_id", "infra_version", "source", "timezone", "stations"],
+  "properties": {
+    "schema_version": {"const": "station_patronage_profile_v1"},
+    "dataset_id": {"type": "string", "minLength": 1},
+    "infra_id": {"type": "string", "minLength": 1},
+    "infra_version": {"type": "string", "minLength": 1},
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "license", "observation_start", "observation_end"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "url": {"type": "string", "format": "uri"},
+        "license": {"type": "string", "minLength": 1},
+        "observation_start": {"type": "string", "format": "date"},
+        "observation_end": {"type": "string", "format": "date"},
+        "retrieved_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "timezone": {"type": "string", "minLength": 1, "description": "IANA timezone for the station service day and local time buckets."},
+    "stations": {
+      "type": "array",
+      "maxItems": 5000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["operational_point_id", "source_station_id", "name", "mapping_method", "buckets"],
+        "properties": {
+          "operational_point_id": {"type": "string", "minLength": 1},
+          "source_station_id": {"type": "string", "minLength": 1},
+          "name": {"type": "string", "minLength": 1},
+          "mapping_method": {"type": "string", "enum": ["source_id", "curated_crosswalk"]},
+          "buckets": {
+            "type": "array",
+            "maxItems": 2000,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["weekday", "start_minute", "duration_minutes", "mean_boardings", "mean_alightings", "observation_count"],
+              "properties": {
+                "weekday": {"type": "integer", "minimum": 0, "maximum": 6, "description": "ISO weekday number: Monday 0 through Sunday 6."},
+                "start_minute": {"type": "integer", "minimum": 0, "maximum": 1439},
+                "duration_minutes": {"type": "integer", "minimum": 1, "maximum": 1440},
+                "mean_boardings": {"type": "number", "minimum": 0},
+                "mean_alightings": {"type": "number", "minimum": 0},
+                "observation_count": {"type": "integer", "minimum": 1}
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

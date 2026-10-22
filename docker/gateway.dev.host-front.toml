@@ -17,6 +17,12 @@ upstream = "http://localhost:8090"
 require_auth = true
 
 [[targets]]
+tracing_name = "ops-intelligence"
+prefix = "/ops-intelligence"
+upstream = "http://localhost:8095"
+require_auth = true
+
+[[targets]]
 tracing_name = "front"
 upstream = "http://localhost:3000"
 require_auth = false

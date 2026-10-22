@@ -75,7 +75,7 @@ def predict(features: Any, model: dict[str, Any], *, batch_size: int = 4096) -> 
         if values.shape[1] != expected_width:
             raise ValueError(f"Expected {expected_width} feature columns, got {values.shape[1]}")
         if quantile_levels is not None and (
-            any(not isinstance(level, (int, float)) for level in quantile_levels)
+            any(not isinstance(level, int | float) for level in quantile_levels)
             or any(not 0.0 < float(level) < 1.0 for level in quantile_levels)
             or tuple(sorted(quantile_levels)) != tuple(quantile_levels)
             or len(set(quantile_levels)) != len(quantile_levels)

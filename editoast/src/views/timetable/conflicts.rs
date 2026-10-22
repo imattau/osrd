@@ -37,16 +37,26 @@ use core_client::conflict_detection::ConflictDetectionRequest;
 use core_client::conflict_detection::ConflictRequirement;
 use core_client::conflict_detection::ConflictType;
 use core_client::conflict_detection::TrainRequirements;
+use core_client::conflict_detection::WorkSchedulesRequest;
 use core_client::simulation::RoutingRequirement;
 use core_client::simulation::RoutingZoneRequirement;
 use core_client::simulation::SpacingRequirement;
 use database::DbConnection;
 use models::Infra;
+use models::WorkSchedule;
+use models::WorkScheduleGroup;
 use models::timetable::TimetableWithTrains;
 use models::train_schedule::OccurrenceId;
 use schemas::TrainOccurrence;
 use schemas::train_schedule::TrainScheduleLike as _;
 use uuid::Uuid;
+
+#[derive(Debug, Default, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+struct WorkScheduleGroupIdQueryParam {
+    /// Optional work-schedule group to include in conflict detection (calendar timetables only).
+    work_schedule_group_id: Option<i64>,
+}
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, ToSchema)]
 pub struct Conflict {
@@ -136,6 +146,7 @@ pub(in crate::views) async fn retrieve_trains(
 pub(super) fn build_conflict_core_request(
     infra: Infra,
     items: impl Iterator<Item = (OccurrenceId, TrainRequirements)>,
+    work_schedules: Option<WorkSchedulesRequest>,
 ) -> (HashMap<Uuid, OccurrenceId>, ConflictDetectionRequest) {
     let mut trains_map: HashMap<Uuid, OccurrenceId> = HashMap::new();
 
@@ -154,7 +165,7 @@ pub(super) fn build_conflict_core_request(
             infra: infra.id,
             expected_version: infra.version,
             trains_requirements,
-            work_schedules: None,
+            work_schedules,
         },
     )
 }
@@ -299,7 +310,7 @@ fn split_routing(period: u64, requirements: &[RoutingRequirement]) -> Vec<Routin
 #[utoipa::path(
     get, path = "",
     tag = "timetable",
-    params(TimetableIdParam, InfraIdQueryParam, ElectricalProfileSetIdQueryParam),
+    params(TimetableIdParam, InfraIdQueryParam, ElectricalProfileSetIdQueryParam, WorkScheduleGroupIdQueryParam),
     responses(
         (status = 200, description = "List of conflicts", body = Vec<Conflict>),
     ),
@@ -319,6 +330,9 @@ pub(in crate::views) async fn conflicts(
     Query(ElectricalProfileSetIdQueryParam {
         electrical_profile_set_id,
     }): Query<ElectricalProfileSetIdQueryParam>,
+    Query(WorkScheduleGroupIdQueryParam {
+        work_schedule_group_id,
+    }): Query<WorkScheduleGroupIdQueryParam>,
 ) -> Result<Json<Vec<Conflict>>> {
     let conn = db_pool.get().await?;
 
@@ -335,6 +349,45 @@ pub(in crate::views) async fn conflicts(
     .await?;
 
     let (timetable_type, trains) = retrieve_trains(conn.clone(), timetable_id).await?;
+
+    let work_schedules = if let Some(group_id) = work_schedule_group_id {
+        if timetable_type == TimetableType::Hourly {
+            return Err(TimetableError::WorkSchedulesNotSupportedForHourly.into());
+        }
+        WorkScheduleGroup::retrieve_or_fail(conn.clone(), group_id, || {
+            TimetableError::WorkScheduleGroupNotFound { group_id }
+        })
+        .await?;
+        let settings = SelectionSettings::new()
+            .order_by(|| WorkSchedule::START_DATE_TIME.asc())
+            .filter(move || WorkSchedule::WORK_SCHEDULE_GROUP_ID.eq(group_id));
+        let schedules = WorkSchedule::list(&mut conn.clone(), settings).await?;
+        Some(WorkSchedulesRequest {
+            work_schedule_requirements: schedules
+                .into_iter()
+                .map(|schedule| {
+                    let schedule_id = schedule.id.to_string();
+                    let value = core_client::stdcm::WorkSchedule {
+                        obj_id: schedule_id.clone(),
+                        start_time: schedule.start_date_time.timestamp_millis() as u64,
+                        end_time: schedule.end_date_time.timestamp_millis() as u64,
+                        track_ranges: schedule
+                            .track_ranges
+                            .iter()
+                            .map(|range| core_client::stdcm::UndirectedTrackRange {
+                                track_section: range.track.to_string(),
+                                begin: (range.begin * 1000.0).round() as u64,
+                                end: (range.end * 1000.0).round() as u64,
+                            })
+                            .collect(),
+                    };
+                    (schedule_id, value)
+                })
+                .collect(),
+        })
+    } else {
+        None
+    };
 
     let timetable_period = match timetable_type {
         TimetableType::Calendar => None,
@@ -544,7 +597,7 @@ pub(in crate::views) async fn conflicts(
     });
 
     let (trains_ids_map, conflict_detection_request) =
-        build_conflict_core_request(infra, request_items);
+        build_conflict_core_request(infra, request_items, work_schedules);
 
     // 3. Call core
     let conflict_detection_response = conflict_detection_request.fetch(&core_client).await?;
@@ -966,7 +1019,7 @@ mod tests {
         ];
 
         let (trains_ids_map, conflict_core_request) =
-            build_conflict_core_request(infra, items.into_iter());
+            build_conflict_core_request(infra, items.into_iter(), None);
 
         assert_eq!(conflict_core_request.trains_requirements.len(), 3);
 

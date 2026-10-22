@@ -103,9 +103,9 @@ def _inverse_ride_delay(values: Any, normalization: dict[str, Any]) -> Any:
 
     if normalization.get("norm") != "zscore" or normalization.get("sqrt") is not True:
         raise ValueError("Expected RIDE's signed-square-root z-score for delay values")
-    root_values = np.asarray(values, dtype=np.float64) * normalization["std"] + normalization[
-        "mean"
-    ]
+    root_values = (
+        np.asarray(values, dtype=np.float64) * normalization["std"] + normalization["mean"]
+    )
     return np.sign(root_values) * np.square(root_values)
 
 
@@ -307,9 +307,7 @@ def train(
             "Install the optional data dependencies: uv sync --extra rail-data"
         ) from error
     scheme = yaml.safe_load((dataset_dir / "tabular" / "scheme.yaml").read_text())
-    normalization = yaml.safe_load(
-        (dataset_dir / "tabular" / "normalization.yaml").read_text()
-    )
+    normalization = yaml.safe_load((dataset_dir / "tabular" / "normalization.yaml").read_text())
     feature_columns = scheme["x_columns"]
     last_delay_column = feature_columns.index("past_delay_sec_1")
     last_known_delay_seconds = _inverse_ride_delay(
@@ -317,7 +315,9 @@ def train(
     )
     target_delay_change_seconds = np.column_stack(
         [
-            _inverse_ride_delay(y_evaluation[:, horizon], normalization[f"future_delay_delta_{horizon + 1}"])
+            _inverse_ride_delay(
+                y_evaluation[:, horizon], normalization[f"future_delay_delta_{horizon + 1}"]
+            )
             for horizon in range(y_evaluation.shape[1])
         ]
     )
@@ -465,7 +465,9 @@ def train(
 
     predicted_delay_change_seconds = np.column_stack(
         [
-            _inverse_ride_delay(predictions[:, horizon], normalization[f"future_delay_delta_{horizon + 1}"])
+            _inverse_ride_delay(
+                predictions[:, horizon], normalization[f"future_delay_delta_{horizon + 1}"]
+            )
             for horizon in range(y_evaluation.shape[1])
         ]
     )
@@ -562,9 +564,12 @@ def train(
             levels = np.asarray(FORECAST_QUANTILES, dtype=np.float32)
             pinball = np.maximum(levels * residuals, (levels - 1) * residuals).mean(axis=0)
             actual_seconds = target_seconds[valid, horizon]
-            quantile_seconds = _inverse_ride_delay(
-                quantile_values, normalization[f"future_delay_delta_{horizon + 1}"]
-            ) + last_known_delay_seconds[valid, None]
+            quantile_seconds = (
+                _inverse_ride_delay(
+                    quantile_values, normalization[f"future_delay_delta_{horizon + 1}"]
+                )
+                + last_known_delay_seconds[valid, None]
+            )
             residuals_seconds = actual_seconds[:, None] - quantile_seconds
             pinball_seconds = np.maximum(
                 levels * residuals_seconds, (levels - 1) * residuals_seconds
@@ -641,8 +646,13 @@ def train(
         "seed": seed,
         "validation_seed": validation_seed,
         "metrics": per_horizon,
-        "target_unit": "absolute future delay in seconds (last known delay plus inverse-transformed RIDE delay change)",
-        "training_label_unit": "future delay change relative to last known delay, in provider-normalized units",
+        "target_unit": (
+            "absolute future delay in seconds (last known delay plus inverse-transformed "
+            "RIDE delay change)"
+        ),
+        "training_label_unit": (
+            "future delay change relative to last known delay, in provider-normalized units"
+        ),
         "macro_metrics_seconds": {
             "mae": float(np.mean(macro_mae_seconds)),
             "rmse": float(np.mean(macro_rmse_seconds)),

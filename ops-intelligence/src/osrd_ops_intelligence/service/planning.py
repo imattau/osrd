@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections import Counter
 from dataclasses import asdict
 
 from osrd_ops_intelligence.api.contracts import (
@@ -22,6 +23,7 @@ from osrd_ops_intelligence.service.osrd_client import (
     CandidateValidation,
     OSRDClient,
     SnapshotRef,
+    UnsupportedSnapshot,
 )
 
 
@@ -33,6 +35,8 @@ def _render_candidate(
     candidate: DepartureShiftCandidate,
     validation: CandidateValidation,
     objective_score: float,
+    baseline_conflict_count: int,
+    new_conflict_count: int,
 ) -> PlanCandidateResult:
     # Kept local so API results expose typed fields, not the mutable OSRD request payload.
     return PlanCandidateResult.model_validate(
@@ -46,6 +50,8 @@ def _render_candidate(
                 "pathfinding_valid": validation.pathfinding_valid,
                 "simulation_valid": validation.simulation_valid,
                 "conflict_count": validation.conflict_count,
+                "baseline_conflict_count": baseline_conflict_count,
+                "new_conflict_count": new_conflict_count,
                 "failure_reasons": list(validation.failure_reasons),
             },
         }
@@ -102,8 +108,11 @@ def _ranking_key(
 
 def _result_ranking_key(
     candidate: PlanCandidateResult,
-) -> tuple[float, int, int, tuple[str, ...]]:
+) -> tuple[bool, bool, int, float, int, int, tuple[str, ...]]:
     return (
+        not candidate.validation.pathfinding_valid,
+        not candidate.validation.simulation_valid,
+        candidate.validation.new_conflict_count,
         candidate.objective_score,
         candidate.total_shift_seconds,
         len(candidate.edits),
@@ -136,11 +145,17 @@ async def plan(request: PlanningRequest, client: OSRDClient) -> PlanningResponse
 
     snapshot = SnapshotRef(**request.snapshot.model_dump())
     baseline_candidate = _pass_through_candidate(request)
-    start_times = await client.get_schedule_start_times(snapshot=snapshot)
+    metadata = await client.get_schedule_metadata(snapshot=snapshot)
+    start_times = metadata.start_times_ms
     affected_ids = set(request.incident.affected_train_schedule_ids)
     protected_ids = set(request.policy.protected_train_schedule_ids)
     weights = request.policy.schedule_priority_weights
-    shift_limits = request.policy.max_shift_seconds_by_schedule
+    shift_limits = dict(request.policy.max_shift_seconds_by_schedule)
+    if metadata.timetable_type == "HOURLY":
+        for schedule_id, hourly_limit in metadata.max_hourly_shift_seconds_by_schedule.items():
+            shift_limits[schedule_id] = min(
+                shift_limits.get(schedule_id, hourly_limit), hourly_limit
+            )
     unknown_policy_ids = (protected_ids | set(weights) | set(shift_limits)) - set(start_times)
     if unknown_policy_ids:
         raise PlanningInputError(
@@ -187,7 +202,14 @@ async def plan(request: PlanningRequest, client: OSRDClient) -> PlanningResponse
         snapshot=snapshot,
         candidate_payload=baseline_candidate.to_dict(),
     )
-    baseline = _render_candidate(baseline_candidate, baseline_validation, 0.0)
+    baseline_signatures = Counter(baseline_validation.conflict_signatures)
+    baseline = _render_candidate(
+        baseline_candidate,
+        baseline_validation,
+        0.0,
+        len(baseline_validation.conflict_signatures),
+        0,
+    )
     accepted: list[PlanCandidateResult] = []
     rejected: list[PlanCandidateResult] = []
     for candidate, score in selected:
@@ -195,8 +217,26 @@ async def plan(request: PlanningRequest, client: OSRDClient) -> PlanningResponse
             snapshot=snapshot,
             candidate_payload=candidate.to_dict(),
         )
-        rendered = _render_candidate(candidate, validation, score)
-        (accepted if validation.validated else rejected).append(rendered)
+        observed_baseline = Counter(validation.baseline_conflict_signatures)
+        if observed_baseline != baseline_signatures:
+            raise UnsupportedSnapshot("Baseline conflicts changed during candidate validation")
+        new_conflict_count = sum(
+            (Counter(validation.conflict_signatures) - baseline_signatures).values()
+        )
+        rendered = _render_candidate(
+            candidate,
+            validation,
+            score,
+            len(baseline_signatures),
+            new_conflict_count,
+        )
+        candidate_is_acceptable = (
+            validation.pathfinding_valid
+            and validation.simulation_valid
+            and new_conflict_count == 0
+            and not any("cleanup failed" in reason for reason in validation.failure_reasons)
+        )
+        (accepted if candidate_is_acceptable else rejected).append(rendered)
 
     accepted.sort(key=_result_ranking_key)
     rejected.sort(key=_result_ranking_key)

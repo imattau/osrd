@@ -5,8 +5,21 @@ services:
     build:
       context: ./ops-intelligence
       dockerfile: Dockerfile
+      args:
+        INSTALL_GNN: ${OSRD_OPS_INSTALL_GNN:-false}
     ports:
-      - "8095:8095"
+      - "127.0.0.1:8095:8095"
+    environment:
+      OSRD_EDITOAST_URL: ${OSRD_EDITOAST_URL:-http://gateway:4000/api}
+      OSRD_AUTHORIZATION: ${OSRD_AUTHORIZATION:-}
+      OSRD_OPS_INSERTION_MODEL: ${OSRD_OPS_INSERTION_MODEL:-}
+      OSRD_OPS_BLIND_REVIEW_MODE: ${OSRD_OPS_BLIND_REVIEW_MODE:-false}
+      OSRD_OPS_REVIEW_INFRASTRUCTURE_GROUP: ${OSRD_OPS_REVIEW_INFRASTRUCTURE_GROUP:-}
+      OSRD_OPS_PLAN_INTENT_ENABLED: ${OSRD_OPS_PLAN_INTENT_ENABLED:-false}
+      OSRD_OPS_PLAN_INTENT_PROVIDER: ${OSRD_OPS_PLAN_INTENT_PROVIDER:-openai}
+      OSRD_OPS_PLAN_INTENT_MODEL: ${OSRD_OPS_PLAN_INTENT_MODEL:-}
+      OSRD_OPS_OLLAMA_BASE_URL: ${OSRD_OPS_OLLAMA_BASE_URL:-http://host.containers.internal:11434}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
     volumes:
       - ops_intelligence_data:/var/lib/osrd-ops-intelligence
     restart: unless-stopped
@@ -15,11 +28,13 @@ services:
         - CMD
         - python
         - -c
-        - "from urllib.request import urlopen; urlopen('http://localhost:8095/healthz', timeout=2)"
+        # Container health tracks the service process; /readyz is an operator-facing
+        # dependency check and can be unavailable while the OSRD stack is starting.
+        - "__import__('urllib.request').request.urlopen('http://localhost:8095/healthz',timeout=4)"
       interval: 10s
-      timeout: 3s
+      timeout: 5s
       retries: 3
-      start_period: 5s
+      start_period: 10s
 
 volumes:
   ops_intelligence_data:

@@ -587,6 +587,11 @@
             .add-button {
               @include toolbar-button-base($has-active: false);
             }
+
+            .add-button[aria-disabled='true'] {
+              opacity: 0.55;
+              cursor: not-allowed;
+            }
           }
 
           .right-group {

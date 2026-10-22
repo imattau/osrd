@@ -18,6 +18,12 @@ upstream = "http://osrd-editoast:80"
 require_auth = true
 
 [[targets]]
+tracing_name = "ops-intelligence"
+prefix = "/ops-intelligence"
+upstream = "http://osrd-ops-intelligence:8095"
+require_auth = true
+
+[[targets]]
 tracing_name = "front"
 upstream = "http://osrd-front:3000"
 require_auth = false
